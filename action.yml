@@ -1,0 +1,62 @@
+name: Exposa SBOM upload
+description: Upload SBOMs to an Exposa release, named by product, hardware revision and version.
+author: Exposa
+branding:
+  icon: upload-cloud
+  color: blue
+
+inputs:
+  url:
+    description: Base URL of your Exposa instance, e.g. https://exposa.example.com
+    required: true
+  organization:
+    description: Your Exposa organization (the slug in its URLs). Must be the API key's organization.
+    required: true
+  api-key:
+    description: An Exposa organization API key (exk_...). Pass it from a secret.
+    required: true
+  product:
+    description: Product name. Created if it does not exist.
+    required: true
+  hardware-revision:
+    description: Hardware revision name. Created if the product has no revision with this name.
+    required: true
+  version:
+    description: Release version, e.g. the tag name (github.ref_name) on a tag build. Created if new.
+    required: true
+  sbom:
+    description: SBOM files to upload, one path or glob per line (** works). All go to the same release.
+    required: true
+  released-at:
+    description: Release date (RFC 3339, e.g. 2026-11-05T12:00:00Z). Used only when the release is created.
+    required: false
+    default: ""
+
+outputs:
+  release-id:
+    description: ID of the release the SBOMs went to
+    value: ${{ steps.upload.outputs.release-id }}
+  release-url:
+    description: Link to the release in the Exposa web app
+    value: ${{ steps.upload.outputs.release-url }}
+  sbom-ids:
+    description: IDs of the uploaded SBOMs, one per line, in file order
+    value: ${{ steps.upload.outputs.sbom-ids }}
+
+runs:
+  using: composite
+  steps:
+    - id: upload
+      shell: bash
+      # Inputs reach the script only as environment variables, never as
+      # ${{ }} inside the script, so their values cannot inject shell code.
+      env:
+        EXPOSA_URL: ${{ inputs.url }}
+        EXPOSA_ORG: ${{ inputs.organization }}
+        EXPOSA_API_KEY: ${{ inputs.api-key }}
+        EXPOSA_PRODUCT: ${{ inputs.product }}
+        EXPOSA_HARDWARE_REVISION: ${{ inputs.hardware-revision }}
+        EXPOSA_VERSION: ${{ inputs.version }}
+        EXPOSA_SBOM: ${{ inputs.sbom }}
+        EXPOSA_RELEASED_AT: ${{ inputs.released-at }}
+      run: bash "$GITHUB_ACTION_PATH/upload.sh"
