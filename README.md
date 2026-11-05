@@ -72,6 +72,42 @@ trusted directly:
 Use one key per repository or pipeline, so you can revoke one without touching
 the others. Keys and trusted publishers can create and upload, but not delete.
 
+### Signing SBOMs
+
+With `sign: true` the step signs each SBOM with [Sigstore](https://www.sigstore.dev)
+(`cosign sign-blob`, keyless) and uploads the signature with it. The signing
+certificate names this repository, workflow, ref and commit, and the signature is
+recorded in Sigstore's public transparency log. Exposa checks it on upload and
+marks the SBOM **signed** when one of your organization's trusted publishers
+allows the run, so anyone can later prove which build produced the document.
+
+```yaml
+permissions:
+  contents: read
+  id-token: write   # for the signing certificate (and the upload, without api-key)
+
+steps:
+  - uses: sigstore/cosign-installer@v3
+  - uses: schmidtfx/upload-sbom@v1
+    with:
+      url: https://exposa.example.com
+      organization: acme
+      product: Gateway
+      hardware-revision: rev-b
+      version: ${{ github.ref_name }}
+      sbom: build/sbom/*.cdx.json
+      sign: true
+```
+
+Signing works with an API key too; the signature, not the credential, says who
+built the document. If you sign in an earlier step, leave `sign` off: a
+`<file>.sigstore.json` next to an SBOM (`cosign sign-blob --new-bundle-format
+--bundle sbom.cdx.json.sigstore.json sbom.cdx.json`) is uploaded as its signature,
+and `*.sigstore.json` files are never uploaded as SBOMs.
+
+Your organization can require signatures (**Trusted publishers → Accept only SBOMs
+signed by a trusted repository**). Unsigned uploads then fail with 403.
+
 ## Inputs
 
 | Input | Required | |
@@ -85,6 +121,7 @@ the others. Keys and trusted publishers can create and upload, but not delete.
 | `version` | yes | Release version. Created if missing. |
 | `sbom` | yes | Files to upload, one path or glob per line. `**` matches any depth. A line that matches nothing fails the step. |
 | `released-at` | no | Release date in RFC 3339 (`2026-11-05T12:00:00Z`), used only when the release is created. |
+| `sign` | no | `true` signs each SBOM with cosign and uploads the signature. Needs cosign 2.4+ and `id-token: write`. Default `false`. |
 
 Formats are detected: CycloneDX 1.2–1.6 (JSON or XML), SPDX 2.x (JSON or
 tag-value), SPDX 3.0 (JSON-LD), up to 64 MiB per file.
@@ -108,9 +145,12 @@ release.
 - **A notice** when it created a release (a new version).
 - **Warnings** Exposa found in a document (an invalid PURL, a dependency on an
   unknown component, ...). The upload still succeeds.
+- **A warning** when an SBOM is signed by a repository or workflow your
+  organization does not trust. It is stored as "signed, untrusted".
 - **An error**, failing the step, when the key or token is rejected (401), the key
   belongs to another organization or the organization does not trust this
-  repository, workflow or ref (404), a file is not a supported SBOM (400), the job
+  repository, workflow or ref (404), a file is not a supported SBOM or its
+  signature does not verify (400), the organization requires signed SBOMs (403), the job
   has neither `api-key` nor `id-token: write`, or Exposa is unreachable (after
   retries).
 
@@ -135,9 +175,21 @@ curl --fail-with-body -H "Authorization: Bearer $EXPOSA_API_KEY" \
 URL-encode the names. The response is JSON: the SBOM, the product, hardware
 revision and release, and `new` telling which of them the upload created.
 
+With a signature, send both as `multipart/form-data`:
+
+```sh
+cosign sign-blob --yes --new-bundle-format --bundle sbom.sigstore.json sbom.cdx.json
+curl --fail-with-body -H "Authorization: Bearer $EXPOSA_API_KEY" \
+  -F sbom=@sbom.cdx.json -F sigstore_bundle=@sbom.sigstore.json \
+  "https://exposa.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&hardware_revision=rev-b&version=1.4.0"
+```
+
+Exposa accepts signatures from GitHub Actions runs (the certificate must name the
+repository by its numeric IDs).
+
 ## Development
 
-`action.yml` runs `upload.sh` (bash, curl, jq). CI runs `shellcheck upload.sh`.
+`action.yml` runs `upload.sh` (bash, curl, jq; cosign for `sign: true`). CI runs `shellcheck upload.sh`.
 Without `api-key`, the script fetches the job's OIDC token from
 `$ACTIONS_ID_TOKEN_REQUEST_URL` (fresh for each file, since tokens are short-lived).
 The end-to-end test against a running Exposa stack is in the Exposa repository's
