@@ -5,11 +5,14 @@
 # Settings come from the environment (action.yml sets them):
 #   EXPOSA_URL, EXPOSA_ORG, EXPOSA_PRODUCT, EXPOSA_HARDWARE_REVISION,
 #   EXPOSA_VERSION, EXPOSA_SBOM (one path or glob per line),
-#   EXPOSA_RELEASED_AT (optional), and for authentication either
+#   EXPOSA_RELEASED_AT (optional), EXPOSA_SIGN (true: sign each file with
+#   cosign; otherwise <file>.sigstore.json is sent if it exists, ADR 0007),
+#   and for authentication either
 #   EXPOSA_API_KEY or nothing: then the job's GitHub OIDC token is used
 #   (needs `permissions: id-token: write`), with EXPOSA_AUDIENCE as its
 #   audience (default: EXPOSA_URL).
-# Needs bash, curl and jq; GitHub-hosted runners have all three.
+# Needs bash, curl and jq; GitHub-hosted runners have all three. Signing
+# needs cosign 2.4 or later.
 #
 # Outside GitHub Actions it works too; the workflow commands it prints
 # (::error:: etc.) are then plain log lines.
@@ -56,6 +59,18 @@ for v in EXPOSA_URL EXPOSA_ORG EXPOSA_PRODUCT EXPOSA_HARDWARE_REVISION EXPOSA_VE
 	[ -n "$(printf '%s' "${!v:-}" | tr -d '[:space:]')" ] || fail "input ${v#EXPOSA_} is empty"
 done
 
+case ${EXPOSA_SIGN:-false} in
+true) sign=1 ;;
+false | "") sign=0 ;;
+*) fail "input sign must be true or false, not \"$EXPOSA_SIGN\"" ;;
+esac
+if [ "$sign" = 1 ]; then
+	command -v cosign >/dev/null ||
+		fail "sign: true needs cosign on the runner; add the step \"uses: sigstore/cosign-installer@v3\" before this one"
+	[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] ||
+		fail "sign: true needs the job's OIDC token: add \"permissions: id-token: write\" to the job"
+fi
+
 base=${EXPOSA_URL%/}
 case $base in
 https://*) ;;
@@ -101,6 +116,8 @@ while IFS= read -r line || [ -n "$line" ]; do
 	unset IFS
 	[ ${#matches[@]} -gt 0 ] || fail "no file matches: $pattern"
 	for f in "${matches[@]}"; do
+		# Signatures next to the SBOMs are not SBOMs themselves.
+		case $f in *.sigstore.json) continue ;; esac
 		[ -f "$f" ] || fail "not a file: $f"
 		files+=("$f")
 	done
@@ -138,13 +155,38 @@ authorize() {
 
 repo=${GITHUB_REPOSITORY:-this repository}
 
+# bundle_for prints the Sigstore bundle to upload with $1, or nothing.
+bundle_for() {
+	if [ "$sign" = 1 ]; then
+		rm -f "$tmp/bundle.json"
+		# Keyless: cosign gets the job's OIDC token itself; the certificate
+		# names this repository, workflow and commit.
+		cosign sign-blob --yes --new-bundle-format --bundle "$tmp/bundle.json" "$1" >/dev/null 2>"$tmp/cosign.log" || {
+			cat "$tmp/cosign.log" >&2
+			fail "cosign could not sign $1"
+		}
+		printf '%s' "$tmp/bundle.json"
+	elif [ -f "$1.sigstore.json" ]; then
+		printf '%s' "$1.sigstore.json"
+	fi
+}
+
 release_id="" sbom_ids="" rows="" failed=0 announced=0
 for f in "${files[@]}"; do
+	bundle=$(bundle_for "$f")
 	authorize
+	if [ -n "$bundle" ]; then
+		# multipart/form-data: the document and its signature. Copies under
+		# fixed names, since curl -F reads ; and , in file names as options.
+		cp "$f" "$tmp/sbom"
+		[ "$bundle" = "$tmp/bundle.json" ] || cp "$bundle" "$tmp/bundle.json"
+		body_args=(-F "sbom=@$tmp/sbom;type=application/octet-stream" -F "sigstore_bundle=@$tmp/bundle.json;type=application/json")
+	else
+		body_args=(-H "Content-Type: application/octet-stream" --data-binary "@$f")
+	fi
 	code=$(curl --silent --show-error --config "$tmp/auth" \
 		--retry 4 --retry-connrefused --connect-timeout 20 --max-time 600 \
-		-H "Content-Type: application/octet-stream" \
-		--data-binary "@$f" -o "$tmp/response" -w '%{http_code}' \
+		"${body_args[@]}" -o "$tmp/response" -w '%{http_code}' \
 		"$endpoint") || {
 		error "could not reach Exposa at $base" "$f"
 		failed=1
@@ -162,6 +204,11 @@ for f in "${files[@]}"; do
 		fail "organization \"$EXPOSA_ORG\" does not trust $repo for this run (404). An admin adds it in Exposa under Trusted publishers; check its workflow, ref and environment restrictions (this run: ${GITHUB_WORKFLOW_REF:-unknown workflow})."
 		;;
 	403) fail "not allowed to upload (403): $body" ;;
+	503)
+		error "Exposa could not check the signature right now (503): $body" "$f"
+		failed=1
+		continue
+		;;
 	*)
 		error "upload failed ($code): $body" "$f"
 		failed=1
@@ -194,22 +241,24 @@ for f in "${files[@]}"; do
 	fi
 	components=$(jq -r '.sbom.components' <<<"$body")
 	format=$(jq -r '.sbom.format + " " + .sbom.spec_version' <<<"$body")
-	echo "$f: $state ($format, $components components)"
+	# verified: signed by a repository the organization trusts.
+	signature=$(jq -r '.sbom.signature_status // "unsigned"' <<<"$body")
+	echo "$f: $state ($format, $components components, $signature)"
 	while IFS= read -r w; do
 		[ -z "$w" ] || warning "$w" "$f"
 	done < <(jq -r '.warnings[]?' <<<"$body")
-	rows+="| \`$f\` | $state | $format | $components |"$'\n'
+	rows+="| \`$f\` | $state | $format | $components | $signature |"$'\n'
 done
 
 if [ -n "$release_id" ]; then
-	release_url="$base/#/releases/$release_id"
+	release_url="$base/#/release/$release_id"
 	output release-id "$release_id"
 	output release-url "$release_url"
 	output sbom-ids "${sbom_ids%$'\n'}"
 	summary "### Exposa: $EXPOSA_PRODUCT / $EXPOSA_HARDWARE_REVISION / $EXPOSA_VERSION"
 	summary ""
-	summary "| File | Result | Format | Components |"
-	summary "| --- | --- | --- | --- |"
+	summary "| File | Result | Format | Components | Signature |"
+	summary "| --- | --- | --- | --- | --- |"
 	summary "${rows%$'\n'}"
 	summary ""
 	summary "[Open the release in Exposa]($release_url). Vulnerabilities appear there once matching has run (usually within a minute)."

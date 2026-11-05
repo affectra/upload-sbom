@@ -39,6 +39,13 @@ inputs:
     description: Release date (RFC 3339, e.g. 2026-11-05T12:00:00Z). Used only when the release is created.
     required: false
     default: ""
+  sign:
+    description: >-
+      true signs each SBOM with Sigstore (cosign sign-blob, keyless) and uploads the signature with it.
+      Needs cosign 2.4 or later on the runner (sigstore/cosign-installer) and permissions id-token write.
+      Without it, a <file>.sigstore.json next to an SBOM is uploaded as its signature.
+    required: false
+    default: "false"
 
 outputs:
   release-id:
@@ -68,4 +75,5 @@ runs:
         EXPOSA_VERSION: ${{ inputs.version }}
         EXPOSA_SBOM: ${{ inputs.sbom }}
         EXPOSA_RELEASED_AT: ${{ inputs.released-at }}
+        EXPOSA_SIGN: ${{ inputs.sign }}
       run: bash "$GITHUB_ACTION_PATH/upload.sh"
