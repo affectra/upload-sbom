@@ -105,6 +105,40 @@ built the document. If you sign in an earlier step, leave `sign` off: a
 --bundle sbom.cdx.json.sigstore.json sbom.cdx.json`) is uploaded as its signature,
 and `*.sigstore.json` files are never uploaded as SBOMs.
 
+#### SBOM attestations
+
+GitHub's [`actions/attest-sbom`](https://github.com/actions/attest-sbom) signs a
+statement that an SBOM describes your build outputs (firmware images, by digest).
+Save its bundle as the SBOM's `.sigstore.json` and Exposa verifies it like a
+signature, and also records which files the SBOM describes:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+steps:
+  # ... build dist/firmware.bin and dist/sbom.cdx.json
+  - uses: actions/attest-sbom@v4
+    id: attest
+    with:
+      subject-path: dist/firmware.bin
+      sbom-path: dist/sbom.cdx.json
+  - run: cp "$BUNDLE" dist/sbom.cdx.json.sigstore.json
+    env:
+      BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+  - uses: schmidtfx/upload-sbom@v1
+    with:
+      # url, organization, product, hardware-revision, version as above
+      sbom: dist/sbom.cdx.json
+```
+
+Leave `sign` off, or it replaces the attestation with a plain signature. Only JSON
+SBOMs can be attested. Exposa accepts attestations from public repositories: in
+private ones GitHub signs them with its own Sigstore instance, which Exposa does not
+check yet.
+
 Your organization can require signatures (**Trusted publishers → Accept only SBOMs
 signed by a trusted repository**). Unsigned uploads then fail with 403.
 
