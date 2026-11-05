@@ -3,9 +3,12 @@
 # revision and version (POST /v1/orgs/{org}/sbom-uploads, ADR 0005).
 #
 # Settings come from the environment (action.yml sets them):
-#   EXPOSA_URL, EXPOSA_ORG, EXPOSA_API_KEY, EXPOSA_PRODUCT,
-#   EXPOSA_HARDWARE_REVISION, EXPOSA_VERSION, EXPOSA_SBOM (one path or glob
-#   per line), EXPOSA_RELEASED_AT (optional).
+#   EXPOSA_URL, EXPOSA_ORG, EXPOSA_PRODUCT, EXPOSA_HARDWARE_REVISION,
+#   EXPOSA_VERSION, EXPOSA_SBOM (one path or glob per line),
+#   EXPOSA_RELEASED_AT (optional), and for authentication either
+#   EXPOSA_API_KEY or nothing: then the job's GitHub OIDC token is used
+#   (needs `permissions: id-token: write`), with EXPOSA_AUDIENCE as its
+#   audience (default: EXPOSA_URL).
 # Needs bash, curl and jq; GitHub-hosted runners have all three.
 #
 # Outside GitHub Actions it works too; the workflow commands it prints
@@ -49,16 +52,9 @@ summary() { [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n' "$1" >>"$GITHUB_S
 command -v curl >/dev/null || fail "curl is not installed on this runner"
 command -v jq >/dev/null || fail "jq is not installed on this runner"
 
-for v in EXPOSA_URL EXPOSA_ORG EXPOSA_API_KEY EXPOSA_PRODUCT EXPOSA_HARDWARE_REVISION EXPOSA_VERSION EXPOSA_SBOM; do
+for v in EXPOSA_URL EXPOSA_ORG EXPOSA_PRODUCT EXPOSA_HARDWARE_REVISION EXPOSA_VERSION EXPOSA_SBOM; do
 	[ -n "$(printf '%s' "${!v:-}" | tr -d '[:space:]')" ] || fail "input ${v#EXPOSA_} is empty"
 done
-
-key=$EXPOSA_API_KEY
-# Secrets are masked already; this also covers a key passed another way.
-echo "::add-mask::$key"
-case $key in
-*[!A-Za-z0-9_-]*) fail "the API key has unexpected characters; pass the key exactly as Exposa showed it" ;;
-esac
 
 base=${EXPOSA_URL%/}
 case $base in
@@ -68,6 +64,23 @@ http://localhost | http://localhost:* | http://127.0.0.1 | http://127.0.0.1:* | 
 esac
 
 uri() { jq -rn --arg v "$1" '$v | @uri'; }
+
+# --- authentication: an API key, or the job's GitHub OIDC token ---
+
+key=$(printf '%s' "${EXPOSA_API_KEY:-}" | tr -d '[:space:]')
+if [ -n "$key" ]; then
+	auth=key
+	# Secrets are masked already; this also covers a key passed another way.
+	echo "::add-mask::$key"
+	case $key in
+	*[!A-Za-z0-9_-]*) fail "the API key has unexpected characters; pass the key exactly as Exposa showed it" ;;
+	esac
+elif [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+	auth=oidc
+	audience=${EXPOSA_AUDIENCE:-$base}
+else
+	fail "no credentials: give the job \"permissions: id-token: write\" (and trust this repository in Exposa under Trusted publishers), or pass api-key"
+fi
 query="product=$(uri "$EXPOSA_PRODUCT")&hardware_revision=$(uri "$EXPOSA_HARDWARE_REVISION")&version=$(uri "$EXPOSA_VERSION")"
 [ -z "$EXPOSA_RELEASED_AT" ] || query+="&released_at=$(uri "$EXPOSA_RELEASED_AT")"
 endpoint="$base/v1/orgs/$(uri "$EXPOSA_ORG")/sbom-uploads?$query"
@@ -99,13 +112,35 @@ shopt -u nullglob
 
 tmp=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/exposa.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
-# The key goes to curl through a config file, not the command line, so it
-# does not show in the runner's process list.
+# Secrets go to curl through config files, not the command line, so they
+# do not show in the runner's process list.
 umask 077
-printf 'header = "Authorization: Bearer %s"\n' "$key" >"$tmp/auth"
+
+# authorize writes the credential for the next upload. A GitHub OIDC token
+# lives for minutes, so each file gets a fresh one.
+authorize() {
+	if [ "$auth" = key ]; then
+		printf 'header = "Authorization: Bearer %s"\n' "$key" >"$tmp/auth"
+		return
+	fi
+	printf 'header = "Authorization: Bearer %s"\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" >"$tmp/gh"
+	local token
+	token=$(curl --silent --show-error --fail --config "$tmp/gh" --retry 4 --connect-timeout 20 --max-time 60 \
+		"$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$(uri "$audience")" | jq -r '.value // empty') ||
+		fail "could not get an OIDC token from GitHub"
+	[ -n "$token" ] || fail "GitHub returned no OIDC token"
+	echo "::add-mask::$token"
+	case $token in
+	*[!A-Za-z0-9._-]*) fail "GitHub returned an unexpected OIDC token" ;;
+	esac
+	printf 'header = "Authorization: Bearer %s"\n' "$token" >"$tmp/auth"
+}
+
+repo=${GITHUB_REPOSITORY:-this repository}
 
 release_id="" sbom_ids="" rows="" failed=0 announced=0
 for f in "${files[@]}"; do
+	authorize
 	code=$(curl --silent --show-error --config "$tmp/auth" \
 		--retry 4 --retry-connrefused --connect-timeout 20 --max-time 600 \
 		-H "Content-Type: application/octet-stream" \
@@ -118,9 +153,15 @@ for f in "${files[@]}"; do
 	body=$(cat "$tmp/response")
 	case $code in
 	200 | 201) ;;
-	401) fail "Exposa rejected the API key (401). Is it revoked, or from another Exposa instance?" ;;
-	404) fail "organization \"$EXPOSA_ORG\" not found for this API key (404). The key must belong to that organization." ;;
-	403) fail "the API key may not upload (403): $body" ;;
+	401)
+		[ "$auth" = key ] && fail "Exposa rejected the API key (401). Is it revoked, or from another Exposa instance?"
+		fail "Exposa rejected the GitHub OIDC token (401). Does this Exposa instance accept GitHub Actions tokens for audience \"$audience\"?"
+		;;
+	404)
+		[ "$auth" = key ] && fail "organization \"$EXPOSA_ORG\" not found for this API key (404). The key must belong to that organization."
+		fail "organization \"$EXPOSA_ORG\" does not trust $repo for this run (404). An admin adds it in Exposa under Trusted publishers; check its workflow, ref and environment restrictions (this run: ${GITHUB_WORKFLOW_REF:-unknown workflow})."
+		;;
+	403) fail "not allowed to upload (403): $body" ;;
 	*)
 		error "upload failed ($code): $body" "$f"
 		failed=1

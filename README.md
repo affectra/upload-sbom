@@ -18,6 +18,9 @@ on:
 jobs:
   sbom:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # lets the job prove to Exposa which repository it runs in
     steps:
       - uses: actions/checkout@v4
       # ... build, and write your SBOMs (Syft, cdxgen, Yocto, ESP-IDF, ...)
@@ -25,7 +28,6 @@ jobs:
         with:
           url: https://exposa.example.com
           organization: acme
-          api-key: ${{ secrets.EXPOSA_API_KEY }}
           product: Gateway
           hardware-revision: rev-b
           version: ${{ github.ref_name }}
@@ -35,23 +37,49 @@ jobs:
 
 Uploading the same file again changes nothing, so re-running a job is safe.
 
-### Setup
+### Setup: trusted publishing (no secret)
+
+1. In Exposa, as an admin of your organization: **Trusted publishers**, enter the
+   repository (`owner/name`) and **Trust repository**. Optionally restrict it to a
+   workflow file (`release.yml`), a ref pattern (`refs/tags/v*`) or a GitHub
+   environment. For a private repository, also enter its IDs:
+   `gh api repos/OWNER/NAME --jq '.owner.id, .id'`.
+2. Give the job `permissions: id-token: write`, as above.
+
+Each run gets a short-lived token from GitHub that names its repository, workflow
+and ref; Exposa checks it against the organization's trusted publishers. Nothing is
+stored in the repository, and Exposa's logs show which repository and run uploaded.
+The repository is pinned by GitHub's IDs, so renaming it keeps it trusted and a new
+repository under the old name does not inherit trust. Tokens from pull requests of
+forks are never issued, so forks cannot upload.
+
+Your Exposa instance must accept GitHub Actions tokens (self-hosted: set
+`EXPOSA_GITHUB_ACTIONS_AUDIENCE` to the URL workflows use). If its admin gives you
+a different audience, pass it as `audience`.
+
+### Setup: API key
+
+For Exposa instances without trusted publishing, or when the repository cannot be
+trusted directly:
 
 1. In Exposa, as an admin of your organization: **API keys → Create**. Copy the
    key; it is shown once.
 2. In your GitHub repository: **Settings → Secrets and variables → Actions →
    New repository secret**, name `EXPOSA_API_KEY`.
+3. Add `api-key: ${{ secrets.EXPOSA_API_KEY }}` to the step. `id-token: write` is
+   then not needed; a key always wins over the token.
 
 Use one key per repository or pipeline, so you can revoke one without touching
-the others. API keys can create and upload, but not delete.
+the others. Keys and trusted publishers can create and upload, but not delete.
 
 ## Inputs
 
 | Input | Required | |
 |---|---|---|
 | `url` | yes | Your Exposa instance. Must be `https://` (plain `http://` only for `localhost`). |
-| `organization` | yes | Your organization's slug, as in its URLs. Must be the API key's organization. |
-| `api-key` | yes | Organization API key. Always from a secret. |
+| `organization` | yes | Your organization's slug, as in its URLs. Must trust this repository, or be the API key's organization. |
+| `api-key` | no | Organization API key, always from a secret. Leave it out to use the job's GitHub OIDC token. |
+| `audience` | no | Audience of the GitHub OIDC token. Defaults to `url`. |
 | `product` | yes | Product name. Created if missing. |
 | `hardware-revision` | yes | Hardware revision of that product. Created if missing. |
 | `version` | yes | Release version. Created if missing. |
@@ -80,9 +108,11 @@ release.
 - **A notice** when it created a release (a new version).
 - **Warnings** Exposa found in a document (an invalid PURL, a dependency on an
   unknown component, ...). The upload still succeeds.
-- **An error**, failing the step, when the key is wrong (401), the key belongs to
-  another organization (404), a file is not a supported SBOM (400), or Exposa is
-  unreachable (after retries).
+- **An error**, failing the step, when the key or token is rejected (401), the key
+  belongs to another organization or the organization does not trust this
+  repository, workflow or ref (404), a file is not a supported SBOM (400), the job
+  has neither `api-key` nor `id-token: write`, or Exposa is unreachable (after
+  retries).
 
 Vulnerabilities appear on the release once Exposa has matched the components,
 usually within a minute; the step does not wait for that.
@@ -108,6 +138,8 @@ revision and release, and `new` telling which of them the upload created.
 ## Development
 
 `action.yml` runs `upload.sh` (bash, curl, jq). CI runs `shellcheck upload.sh`.
+Without `api-key`, the script fetches the job's OIDC token from
+`$ACTIONS_ID_TOKEN_REQUEST_URL` (fresh for each file, since tokens are short-lived).
 The end-to-end test against a running Exposa stack is in the Exposa repository's
 `e2e` job, which uses this action from `main`.
 

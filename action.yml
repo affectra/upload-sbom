@@ -10,11 +10,19 @@ inputs:
     description: Base URL of your Exposa instance, e.g. https://exposa.example.com
     required: true
   organization:
-    description: Your Exposa organization (the slug in its URLs). Must be the API key's organization.
+    description: Your Exposa organization (the slug in its URLs). Must be the API key's organization, or trust this repository.
     required: true
   api-key:
-    description: An Exposa organization API key (exk_...). Pass it from a secret.
-    required: true
+    description: >-
+      An Exposa organization API key (exk_...), from a secret. Leave it out to use the
+      job's GitHub OIDC token instead (needs permissions id-token: write, and the
+      repository trusted in Exposa under Trusted publishers).
+    required: false
+    default: ""
+  audience:
+    description: Audience of the GitHub OIDC token. Defaults to url; set it only if your Exposa admin says so.
+    required: false
+    default: ""
   product:
     description: Product name. Created if it does not exist.
     required: true
@@ -54,6 +62,7 @@ runs:
         EXPOSA_URL: ${{ inputs.url }}
         EXPOSA_ORG: ${{ inputs.organization }}
         EXPOSA_API_KEY: ${{ inputs.api-key }}
+        EXPOSA_AUDIENCE: ${{ inputs.audience }}
         EXPOSA_PRODUCT: ${{ inputs.product }}
         EXPOSA_HARDWARE_REVISION: ${{ inputs.hardware-revision }}
         EXPOSA_VERSION: ${{ inputs.version }}
