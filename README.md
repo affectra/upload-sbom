@@ -4,9 +4,13 @@ Uploads the SBOMs your build produces to Affectra, into the
 release they describe. Affectra then shows which vulnerabilities affect that
 release and lets you record what you assessed (VEX).
 
-You name the release the way your pipeline knows it: **product**, **hardware
-revision** and **version**. Whatever does not exist yet is created, so a new
+You name the release the way your pipeline knows it: **product**, optionally a
+**variant**, and **version**. Whatever does not exist yet is created, so a new
 version needs no setup in Affectra.
+
+A variant is a build of the product that gets its own releases: a hardware revision
+(`rev-b`), a platform (`linux-arm64`), an edition (`pro`) or a SKU. A product with a
+single build doesn't need one; its releases go into the product's `default` variant.
 
 ## Usage
 
@@ -24,12 +28,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # ... build, and write your SBOMs (Syft, cdxgen, Yocto, ESP-IDF, ...)
-      - uses: affectra/upload-sbom@v1   # pin to a commit SHA in production
+      - uses: affectra/upload-sbom@v2   # pin to a commit SHA in production
         with:
           url: https://affectra.example.com
           organization: acme
           product: Gateway
-          hardware-revision: rev-b
+          variant: rev-b      # optional
           version: ${{ github.ref_name }}
           sbom: |
             build/sbom/*.cdx.json
@@ -88,12 +92,12 @@ permissions:
 
 steps:
   - uses: sigstore/cosign-installer@v3
-  - uses: affectra/upload-sbom@v1
+  - uses: affectra/upload-sbom@v2
     with:
       url: https://affectra.example.com
       organization: acme
       product: Gateway
-      hardware-revision: rev-b
+      variant: rev-b
       version: ${{ github.ref_name }}
       sbom: build/sbom/*.cdx.json
       sign: true
@@ -128,9 +132,9 @@ steps:
   - run: cp "$BUNDLE" dist/sbom.cdx.json.sigstore.json
     env:
       BUNDLE: ${{ steps.attest.outputs.bundle-path }}
-  - uses: affectra/upload-sbom@v1
+  - uses: affectra/upload-sbom@v2
     with:
-      # url, organization, product, hardware-revision, version as above
+      # url, organization, product, variant, version as above
       sbom: dist/sbom.cdx.json
 ```
 
@@ -151,7 +155,7 @@ signed by a trusted repository**). Unsigned uploads then fail with 403.
 | `api-key` | no | Organization API key, always from a secret. Leave it out to use the job's GitHub OIDC token. |
 | `audience` | no | Audience of the GitHub OIDC token. Defaults to `url`. |
 | `product` | yes | Product name. Created if missing. |
-| `hardware-revision` | yes | Hardware revision of that product. Created if missing. |
+| `variant` | no | Variant of that product (hardware revision, platform, edition, SKU). Created if missing. Empty: the product's `default` variant. |
 | `version` | yes | Release version. Created if missing. |
 | `sbom` | yes | Files to upload, one path or glob per line. `**` matches any depth. A line that matches nothing fails the step. |
 | `released-at` | no | Release date in RFC 3339 (`2026-11-05T12:00:00Z`), used only when the release is created. |
@@ -173,7 +177,7 @@ release.
 
 ## What you will see
 
-- **A warning** when the step created a product or a hardware revision. This is
+- **A warning** when the step created a product or a named variant. This is
   expected the first time; after that it usually means a typo in the workflow.
   Delete the stray product in Affectra and fix the name.
 - **A notice** when it created a release (a new version).
@@ -203,11 +207,11 @@ The action is one HTTP request per file; any CI can do the same:
 ```sh
 curl --fail-with-body -H "Authorization: Bearer $AFFECTRA_API_KEY" \
   -H "Content-Type: application/octet-stream" --data-binary @sbom.cdx.json \
-  "https://affectra.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&hardware_revision=rev-b&version=1.4.0"
+  "https://affectra.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&variant=rev-b&version=1.4.0"
 ```
 
-URL-encode the names. The response is JSON: the SBOM, the product, hardware
-revision and release, and `new` telling which of them the upload created.
+URL-encode the names; leave out `variant` for the default variant. The response is
+JSON: the SBOM, the product, variant and release, and `new` telling which of them the upload created.
 
 With a signature, send both as `multipart/form-data`:
 
@@ -215,11 +219,18 @@ With a signature, send both as `multipart/form-data`:
 cosign sign-blob --yes --new-bundle-format --bundle sbom.sigstore.json sbom.cdx.json
 curl --fail-with-body -H "Authorization: Bearer $AFFECTRA_API_KEY" \
   -F sbom=@sbom.cdx.json -F sigstore_bundle=@sbom.sigstore.json \
-  "https://affectra.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&hardware_revision=rev-b&version=1.4.0"
+  "https://affectra.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&variant=rev-b&version=1.4.0"
 ```
 
 Affectra accepts signatures from GitHub Actions runs (the certificate must name the
 repository by its numeric IDs).
+
+## From v1
+
+v2 renames the input `hardware-revision` to `variant` and makes it optional. Rename the
+input in your workflow and change `@v1` to `@v2`; your existing releases keep their
+names. Affectra refuses uploads that still send `hardware_revision` (400), so a
+workflow left on v1 fails instead of uploading into the default variant.
 
 ## Development
 
