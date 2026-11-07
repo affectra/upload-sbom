@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # ... build, and write your SBOMs (Syft, cdxgen, Yocto, ESP-IDF, ...)
-      - uses: schmidtfx/upload-sbom@v1   # pin to a commit SHA in production
+      - uses: affectra/upload-sbom@v1   # pin to a commit SHA in production
         with:
           url: https://affectra.example.com
           organization: acme
@@ -88,7 +88,7 @@ permissions:
 
 steps:
   - uses: sigstore/cosign-installer@v3
-  - uses: schmidtfx/upload-sbom@v1
+  - uses: affectra/upload-sbom@v1
     with:
       url: https://affectra.example.com
       organization: acme
@@ -128,7 +128,7 @@ steps:
   - run: cp "$BUNDLE" dist/sbom.cdx.json.sigstore.json
     env:
       BUNDLE: ${{ steps.attest.outputs.bundle-path }}
-  - uses: schmidtfx/upload-sbom@v1
+  - uses: affectra/upload-sbom@v1
     with:
       # url, organization, product, hardware-revision, version as above
       sbom: dist/sbom.cdx.json
