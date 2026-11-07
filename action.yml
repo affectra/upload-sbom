@@ -1,5 +1,5 @@
 name: Affectra SBOM upload
-description: Upload SBOMs to an Affectra release, named by product, hardware revision and version.
+description: Upload SBOMs to an Affectra release, named by product, variant and version.
 author: Affectra
 branding:
   icon: upload-cloud
@@ -26,9 +26,12 @@ inputs:
   product:
     description: Product name. Created if it does not exist.
     required: true
-  hardware-revision:
-    description: Hardware revision name. Created if the product has no revision with this name.
-    required: true
+  variant:
+    description: >-
+      Variant of the product (a hardware revision, platform, edition or SKU). Created if the
+      product has no variant with this name. Leave it out for the product's default variant.
+    required: false
+    default: ""
   version:
     description: Release version, e.g. the tag name (github.ref_name) on a tag build. Created if new.
     required: true
@@ -71,7 +74,7 @@ runs:
         AFFECTRA_API_KEY: ${{ inputs.api-key }}
         AFFECTRA_AUDIENCE: ${{ inputs.audience }}
         AFFECTRA_PRODUCT: ${{ inputs.product }}
-        AFFECTRA_HARDWARE_REVISION: ${{ inputs.hardware-revision }}
+        AFFECTRA_VARIANT: ${{ inputs.variant }}
         AFFECTRA_VERSION: ${{ inputs.version }}
         AFFECTRA_SBOM: ${{ inputs.sbom }}
         AFFECTRA_RELEASED_AT: ${{ inputs.released-at }}
