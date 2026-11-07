@@ -1,12 +1,12 @@
-# Exposa SBOM upload
+# Affectra SBOM upload
 
-Uploads the SBOMs your build produces to Exposa, into the
-release they describe. Exposa then shows which vulnerabilities affect that
+Uploads the SBOMs your build produces to Affectra, into the
+release they describe. Affectra then shows which vulnerabilities affect that
 release and lets you record what you assessed (VEX).
 
 You name the release the way your pipeline knows it: **product**, **hardware
 revision** and **version**. Whatever does not exist yet is created, so a new
-version needs no setup in Exposa.
+version needs no setup in Affectra.
 
 ## Usage
 
@@ -20,13 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write   # lets the job prove to Exposa which repository it runs in
+      id-token: write   # lets the job prove to Affectra which repository it runs in
     steps:
       - uses: actions/checkout@v4
       # ... build, and write your SBOMs (Syft, cdxgen, Yocto, ESP-IDF, ...)
       - uses: schmidtfx/upload-sbom@v1   # pin to a commit SHA in production
         with:
-          url: https://exposa.example.com
+          url: https://affectra.example.com
           organization: acme
           product: Gateway
           hardware-revision: rev-b
@@ -39,7 +39,7 @@ Uploading the same file again changes nothing, so re-running a job is safe.
 
 ### Setup: trusted publishing (no secret)
 
-1. In Exposa, as an admin of your organization: **Trusted publishers**, enter the
+1. In Affectra, as an admin of your organization: **Trusted publishers**, enter the
    repository (`owner/name`) and **Trust repository**. Optionally restrict it to a
    workflow file (`release.yml`), a ref pattern (`refs/tags/v*`) or a GitHub
    environment. For a private repository, also enter its IDs:
@@ -47,26 +47,26 @@ Uploading the same file again changes nothing, so re-running a job is safe.
 2. Give the job `permissions: id-token: write`, as above.
 
 Each run gets a short-lived token from GitHub that names its repository, workflow
-and ref; Exposa checks it against the organization's trusted publishers. Nothing is
-stored in the repository, and Exposa's logs show which repository and run uploaded.
+and ref; Affectra checks it against the organization's trusted publishers. Nothing is
+stored in the repository, and Affectra's logs show which repository and run uploaded.
 The repository is pinned by GitHub's IDs, so renaming it keeps it trusted and a new
 repository under the old name does not inherit trust. Tokens from pull requests of
 forks are never issued, so forks cannot upload.
 
-Your Exposa instance must accept GitHub Actions tokens (self-hosted: set
-`EXPOSA_GITHUB_ACTIONS_AUDIENCE` to the URL workflows use). If its admin gives you
+Your Affectra instance must accept GitHub Actions tokens (self-hosted: set
+`AFFECTRA_GITHUB_ACTIONS_AUDIENCE` to the URL workflows use). If its admin gives you
 a different audience, pass it as `audience`.
 
 ### Setup: API key
 
-For Exposa instances without trusted publishing, or when the repository cannot be
+For Affectra instances without trusted publishing, or when the repository cannot be
 trusted directly:
 
-1. In Exposa, as an admin of your organization: **API keys → Create**. Copy the
+1. In Affectra, as an admin of your organization: **API keys → Create**. Copy the
    key; it is shown once.
 2. In your GitHub repository: **Settings → Secrets and variables → Actions →
-   New repository secret**, name `EXPOSA_API_KEY`.
-3. Add `api-key: ${{ secrets.EXPOSA_API_KEY }}` to the step. `id-token: write` is
+   New repository secret**, name `AFFECTRA_API_KEY`.
+3. Add `api-key: ${{ secrets.AFFECTRA_API_KEY }}` to the step. `id-token: write` is
    then not needed; a key always wins over the token.
 
 Use one key per repository or pipeline, so you can revoke one without touching
@@ -77,7 +77,7 @@ the others. Keys and trusted publishers can create and upload, but not delete.
 With `sign: true` the step signs each SBOM with [Sigstore](https://www.sigstore.dev)
 (`cosign sign-blob`, keyless) and uploads the signature with it. The signing
 certificate names this repository, workflow, ref and commit, and the signature is
-recorded in Sigstore's public transparency log. Exposa checks it on upload and
+recorded in Sigstore's public transparency log. Affectra checks it on upload and
 marks the SBOM **signed** when one of your organization's trusted publishers
 allows the run, so anyone can later prove which build produced the document.
 
@@ -90,7 +90,7 @@ steps:
   - uses: sigstore/cosign-installer@v3
   - uses: schmidtfx/upload-sbom@v1
     with:
-      url: https://exposa.example.com
+      url: https://affectra.example.com
       organization: acme
       product: Gateway
       hardware-revision: rev-b
@@ -109,7 +109,7 @@ and `*.sigstore.json` files are never uploaded as SBOMs.
 
 GitHub's [`actions/attest-sbom`](https://github.com/actions/attest-sbom) signs a
 statement that an SBOM describes your build outputs (firmware images, by digest).
-Save its bundle as the SBOM's `.sigstore.json` and Exposa verifies it like a
+Save its bundle as the SBOM's `.sigstore.json` and Affectra verifies it like a
 signature, and also records which files the SBOM describes:
 
 ```yaml
@@ -135,8 +135,8 @@ steps:
 ```
 
 Leave `sign` off, or it replaces the attestation with a plain signature. Only JSON
-SBOMs can be attested. Exposa accepts attestations from public repositories: in
-private ones GitHub signs them with its own Sigstore instance, which Exposa does not
+SBOMs can be attested. Affectra accepts attestations from public repositories: in
+private ones GitHub signs them with its own Sigstore instance, which Affectra does not
 check yet.
 
 Your organization can require signatures (**Trusted publishers → Accept only SBOMs
@@ -146,7 +146,7 @@ signed by a trusted repository**). Unsigned uploads then fail with 403.
 
 | Input | Required | |
 |---|---|---|
-| `url` | yes | Your Exposa instance. Must be `https://` (plain `http://` only for `localhost`). |
+| `url` | yes | Your Affectra instance. Must be `https://` (plain `http://` only for `localhost`). |
 | `organization` | yes | Your organization's slug, as in its URLs. Must trust this repository, or be the API key's organization. |
 | `api-key` | no | Organization API key, always from a secret. Leave it out to use the job's GitHub OIDC token. |
 | `audience` | no | Audience of the GitHub OIDC token. Defaults to `url`. |
@@ -165,7 +165,7 @@ tag-value), SPDX 3.0 (JSON-LD), up to 64 MiB per file.
 | Output | |
 |---|---|
 | `release-id` | ID of the release |
-| `release-url` | Link to the release in the Exposa web app |
+| `release-url` | Link to the release in the Affectra web app |
 | `sbom-ids` | IDs of the uploaded SBOMs, one per line, in file order |
 
 The step also writes a job summary with each file's result and a link to the
@@ -175,9 +175,9 @@ release.
 
 - **A warning** when the step created a product or a hardware revision. This is
   expected the first time; after that it usually means a typo in the workflow.
-  Delete the stray product in Exposa and fix the name.
+  Delete the stray product in Affectra and fix the name.
 - **A notice** when it created a release (a new version).
-- **Warnings** Exposa found in a document (an invalid PURL, a dependency on an
+- **Warnings** Affectra found in a document (an invalid PURL, a dependency on an
   unknown component, ...). The upload still succeeds.
 - **A warning** when an SBOM is signed by a repository or workflow your
   organization does not trust. It is stored as "signed, untrusted".
@@ -185,10 +185,10 @@ release.
   belongs to another organization or the organization does not trust this
   repository, workflow or ref (404), a file is not a supported SBOM or its
   signature does not verify (400), the organization requires signed SBOMs (403), the job
-  has neither `api-key` nor `id-token: write`, or Exposa is unreachable (after
+  has neither `api-key` nor `id-token: write`, or Affectra is unreachable (after
   retries).
 
-Vulnerabilities appear on the release once Exposa has matched the components,
+Vulnerabilities appear on the release once Affectra has matched the components,
 usually within a minute; the step does not wait for that.
 
 ## Runners
@@ -201,9 +201,9 @@ runners need `bash`, `curl` and `jq`.
 The action is one HTTP request per file; any CI can do the same:
 
 ```sh
-curl --fail-with-body -H "Authorization: Bearer $EXPOSA_API_KEY" \
+curl --fail-with-body -H "Authorization: Bearer $AFFECTRA_API_KEY" \
   -H "Content-Type: application/octet-stream" --data-binary @sbom.cdx.json \
-  "https://exposa.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&hardware_revision=rev-b&version=1.4.0"
+  "https://affectra.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&hardware_revision=rev-b&version=1.4.0"
 ```
 
 URL-encode the names. The response is JSON: the SBOM, the product, hardware
@@ -213,12 +213,12 @@ With a signature, send both as `multipart/form-data`:
 
 ```sh
 cosign sign-blob --yes --new-bundle-format --bundle sbom.sigstore.json sbom.cdx.json
-curl --fail-with-body -H "Authorization: Bearer $EXPOSA_API_KEY" \
+curl --fail-with-body -H "Authorization: Bearer $AFFECTRA_API_KEY" \
   -F sbom=@sbom.cdx.json -F sigstore_bundle=@sbom.sigstore.json \
-  "https://exposa.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&hardware_revision=rev-b&version=1.4.0"
+  "https://affectra.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&hardware_revision=rev-b&version=1.4.0"
 ```
 
-Exposa accepts signatures from GitHub Actions runs (the certificate must name the
+Affectra accepts signatures from GitHub Actions runs (the certificate must name the
 repository by its numeric IDs).
 
 ## Development
@@ -226,7 +226,7 @@ repository by its numeric IDs).
 `action.yml` runs `upload.sh` (bash, curl, jq; cosign for `sign: true`). CI runs `shellcheck upload.sh`.
 Without `api-key`, the script fetches the job's OIDC token from
 `$ACTIONS_ID_TOKEN_REQUEST_URL` (fresh for each file, since tokens are short-lived).
-The end-to-end test against a running Exposa stack is in the Exposa repository's
+The end-to-end test against a running Affectra stack is in the Affectra repository's
 `e2e` job, which uses this action from `main`.
 
 Releasing: tag `v1.2.3` and push it, then move the major tag for a final release
