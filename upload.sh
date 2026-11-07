@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Uploads SBOM files to an Affectra release named by product, hardware
-# revision and version (POST /v1/orgs/{org}/sbom-uploads, ADR 0005).
+# Uploads SBOM files to an Affectra release named by product, variant and
+# version (POST /v1/orgs/{org}/sbom-uploads, ADR 0005 and ADR 0011).
 #
 # Settings come from the environment (action.yml sets them):
-#   AFFECTRA_URL, AFFECTRA_ORG, AFFECTRA_PRODUCT, AFFECTRA_HARDWARE_REVISION,
-#   AFFECTRA_VERSION, AFFECTRA_SBOM (one path or glob per line),
+#   AFFECTRA_URL, AFFECTRA_ORG, AFFECTRA_PRODUCT, AFFECTRA_VARIANT (optional:
+#   empty means the product's default variant), AFFECTRA_VERSION, AFFECTRA_SBOM (one path or glob per line),
 #   AFFECTRA_RELEASED_AT (optional), AFFECTRA_SIGN (true: sign each file with
 #   cosign; otherwise <file>.sigstore.json is sent if it exists, ADR 0007),
 #   and for authentication either
@@ -55,7 +55,7 @@ summary() { [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n' "$1" >>"$GITHUB_S
 command -v curl >/dev/null || fail "curl is not installed on this runner"
 command -v jq >/dev/null || fail "jq is not installed on this runner"
 
-for v in AFFECTRA_URL AFFECTRA_ORG AFFECTRA_PRODUCT AFFECTRA_HARDWARE_REVISION AFFECTRA_VERSION AFFECTRA_SBOM; do
+for v in AFFECTRA_URL AFFECTRA_ORG AFFECTRA_PRODUCT AFFECTRA_VERSION AFFECTRA_SBOM; do
 	[ -n "$(printf '%s' "${!v:-}" | tr -d '[:space:]')" ] || fail "input ${v#AFFECTRA_} is empty"
 done
 
@@ -96,7 +96,9 @@ elif [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQU
 else
 	fail "no credentials: give the job \"permissions: id-token: write\" (and trust this repository in Affectra under Trusted publishers), or pass api-key"
 fi
-query="product=$(uri "$AFFECTRA_PRODUCT")&hardware_revision=$(uri "$AFFECTRA_HARDWARE_REVISION")&version=$(uri "$AFFECTRA_VERSION")"
+variant=$(printf '%s' "${AFFECTRA_VARIANT:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+query="product=$(uri "$AFFECTRA_PRODUCT")&version=$(uri "$AFFECTRA_VERSION")"
+[ -z "$variant" ] || query+="&variant=$(uri "$variant")"
 [ -z "$AFFECTRA_RELEASED_AT" ] || query+="&released_at=$(uri "$AFFECTRA_RELEASED_AT")"
 endpoint="$base/v1/orgs/$(uri "$AFFECTRA_ORG")/sbom-uploads?$query"
 
@@ -217,20 +219,26 @@ for f in "${files[@]}"; do
 	esac
 
 	release_id=$(jq -r '.release.id' <<<"$body")
+	# The variant the server used: the one named, or the default.
+	variant=$(jq -r '.variant.name // empty' <<<"$body")
 	sbom_id=$(jq -r '.sbom.id' <<<"$body")
 	sbom_ids+="$sbom_id"$'\n'
 
 	if [ "$announced" = 0 ]; then
 		announced=1
-		# A new product or revision is often a typo; say so loudly.
+		# The default variant is left out of names, as in the web app.
+		label=$AFFECTRA_PRODUCT
+		case $variant in "" | default) ;; *) label+=" / $variant" ;; esac
+		# A new product or variant is often a typo; say so loudly.
 		if [ "$(jq -r '.new.product' <<<"$body")" = true ]; then
 			warning "created product \"$AFFECTRA_PRODUCT\" in Affectra; if that is a typo, delete it there and fix the workflow"
 		fi
-		if [ "$(jq -r '.new.hardware_revision' <<<"$body")" = true ]; then
-			warning "created hardware revision \"$AFFECTRA_HARDWARE_REVISION\" of \"$AFFECTRA_PRODUCT\" in Affectra"
+		# The default variant wasn't typed, so it can't be a typo.
+		if [ "$(jq -r '.new.variant' <<<"$body")" = true ] && [ "$variant" != default ]; then
+			warning "created variant \"$variant\" of \"$AFFECTRA_PRODUCT\" in Affectra"
 		fi
 		if [ "$(jq -r '.new.release' <<<"$body")" = true ]; then
-			notice "created release $AFFECTRA_VERSION of $AFFECTRA_PRODUCT / $AFFECTRA_HARDWARE_REVISION"
+			notice "created release $AFFECTRA_VERSION of $label"
 		fi
 	fi
 
@@ -255,7 +263,7 @@ if [ -n "$release_id" ]; then
 	output release-id "$release_id"
 	output release-url "$release_url"
 	output sbom-ids "${sbom_ids%$'\n'}"
-	summary "### Affectra: $AFFECTRA_PRODUCT / $AFFECTRA_HARDWARE_REVISION / $AFFECTRA_VERSION"
+	summary "### Affectra: $label / $AFFECTRA_VERSION"
 	summary ""
 	summary "| File | Result | Format | Components | Signature |"
 	summary "| --- | --- | --- | --- | --- |"
