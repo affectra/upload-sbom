@@ -195,6 +195,14 @@ for f in "${files[@]}"; do
 		continue
 	}
 	body=$(cat "$tmp/response")
+	# Affectra answers errors as problem details (RFC 9457): print the English
+	# detail and its code. Anything else (an older Affectra, a proxy's error
+	# page) is printed as it is.
+	msg=$body
+	if [ "${code:0:1}" != 2 ] && detail=$(jq -er 'select(.detail | type == "string")
+		| .detail + (if (.code | type) == "string" then " [" + .code + "]" else "" end)' <<<"$body" 2>/dev/null); then
+		msg=$detail
+	fi
 	case $code in
 	200 | 201) ;;
 	401)
@@ -205,14 +213,14 @@ for f in "${files[@]}"; do
 		[ "$auth" = key ] && fail "organization \"$AFFECTRA_ORG\" not found for this API key (404). The key must belong to that organization."
 		fail "organization \"$AFFECTRA_ORG\" does not trust $repo for this run (404). An admin adds it in Affectra under Trusted publishers; check its workflow, ref and environment restrictions (this run: ${GITHUB_WORKFLOW_REF:-unknown workflow})."
 		;;
-	403) fail "not allowed to upload (403): $body" ;;
+	403) fail "not allowed to upload (403): $msg" ;;
 	503)
-		error "Affectra could not check the signature right now (503): $body" "$f"
+		error "Affectra could not check the signature right now (503): $msg" "$f"
 		failed=1
 		continue
 		;;
 	*)
-		error "upload failed ($code): $body" "$f"
+		error "upload failed ($code): $msg" "$f"
 		failed=1
 		continue
 		;;
