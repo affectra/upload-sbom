@@ -173,6 +173,20 @@ bundle_for() {
 	fi
 }
 
+# retry_after prints the seconds to wait from the Retry-After header in file $1
+# (delta-seconds; a date or a missing header gives the default).
+default_retry_wait=30 max_retry_wait=300
+retry_after() {
+	local v
+	v=$(tr -d '\r' <"$1" | grep -i '^retry-after:' | tail -n 1 | cut -d: -f2- | tr -d '[:space:]') || true
+	case $v in
+	"" | *[!0-9]*) echo "$default_retry_wait" ;;
+	# More digits than any sane wait: avoid overflow, over the cap anyway.
+	???????*) echo $((max_retry_wait + 1)) ;;
+	*) echo $((10#$v)) ;;
+	esac
+}
+
 release_id="" sbom_ids="" rows="" failed=0 announced=0
 for f in "${files[@]}"; do
 	bundle=$(bundle_for "$f")
@@ -186,14 +200,47 @@ for f in "${files[@]}"; do
 	else
 		body_args=(-H "Content-Type: application/octet-stream" --data-binary "@$f")
 	fi
-	code=$(curl --silent --show-error --config "$tmp/auth" \
-		--retry 4 --retry-connrefused --connect-timeout 20 --max-time 600 \
-		"${body_args[@]}" -o "$tmp/response" -w '%{http_code}' \
-		"$endpoint") || {
-		error "could not reach Affectra at $base" "$f"
-		failed=1
-		continue
-	}
+	# Retries are done here, not by curl: curl --retry would also retry a 429,
+	# and without a cap on Retry-After. A 429 is retried once after Retry-After
+	# (ADR 0018); connection errors and 408/5xx up to 4 times with backoff.
+	rate_limited=0 transient=0
+	while :; do
+		rc=0
+		code=$(curl --silent --show-error --config "$tmp/auth" \
+			--connect-timeout 20 --max-time 600 \
+			"${body_args[@]}" -D "$tmp/headers" -o "$tmp/response" -w '%{http_code}' \
+			"$endpoint") || rc=$?
+		if [ "$rc" != 0 ]; then
+			# 7 refused, 28 timeout, 52 empty reply, 56 receive failure
+			case $rc in 7 | 28 | 52 | 56) [ "$transient" -lt 4 ] && {
+				sleep $((1 << transient))
+				transient=$((transient + 1))
+				continue
+			} ;; esac
+			error "could not reach Affectra at $base" "$f"
+			failed=1
+			continue 2
+		fi
+		case $code in
+		408 | 500 | 502 | 503 | 504)
+			[ "$transient" -lt 4 ] || break
+			sleep $((1 << transient))
+			transient=$((transient + 1))
+			;;
+		429)
+			[ "$rate_limited" = 0 ] || break
+			wait=$(retry_after "$tmp/headers")
+			if [ "$wait" -gt "$max_retry_wait" ]; then
+				warning "Affectra asked to wait ${wait}s (Retry-After), more than the ${max_retry_wait}s limit; not retrying" "$f"
+				break
+			fi
+			notice "Affectra is rate limiting uploads (429); retrying $f once after ${wait}s"
+			sleep "$wait"
+			rate_limited=1
+			;;
+		*) break ;;
+		esac
+	done
 	body=$(cat "$tmp/response")
 	# Affectra answers errors as problem details (RFC 9457): print the English
 	# detail and its code. Anything else (an older Affectra, a proxy's error

@@ -195,6 +195,15 @@ release.
 Vulnerabilities appear on the release once Affectra has matched the components,
 usually within a minute; the step does not wait for that.
 
+## Rate limits
+
+Affectra limits how fast an organization can upload. When it answers `429 Too Many
+Requests`, the step waits for the `Retry-After` header (seconds; 30 if missing or not a
+number) and tries the file once more. If Retry-After is over 300 seconds it does not wait,
+and if the second try is also refused it fails with Affectra's message. Space out
+uploads or send fewer, larger jobs if you hit this often. Connection errors and 5xx answers
+are retried up to four times with a short backoff.
+
 ## Runners
 
 GitHub-hosted Linux, macOS and Windows runners work as they are. Self-hosted
@@ -234,7 +243,8 @@ workflow left on v1 fails instead of uploading into the default variant.
 
 ## Development
 
-`action.yml` runs `upload.sh` (bash, curl, jq; cosign for `sign: true`). CI runs `shellcheck upload.sh`.
+`action.yml` runs `upload.sh` (bash, curl, jq; cosign for `sign: true`). CI runs `shellcheck upload.sh test/run.sh` and `test/run.sh`
+(upload.sh against a fake server in `test/fake_server.py`; needs python3).
 Without `api-key`, the script fetches the job's OIDC token from
 `$ACTIONS_ID_TOKEN_REQUEST_URL` (fresh for each file, since tokens are short-lived).
 The end-to-end test against a running Affectra stack is in the Affectra repository's
