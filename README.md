@@ -146,6 +146,37 @@ check yet.
 Your organization can require signatures (**Trusted publishers → Accept only SBOMs
 signed by a trusted repository**). Unsigned uploads then fail with 403.
 
+### Build provenance
+
+[`actions/attest-build-provenance`](https://github.com/actions/attest-build-provenance)
+signs a statement that this workflow run built your firmware images (SLSA v1
+provenance). Pass its bundle as `provenance` and Affectra lists each image on the
+release's **Firmware** tab with the run that built it and the SBOMs that describe it:
+
+```yaml
+steps:
+  # ... build dist/firmware.bin, attest its SBOM as above
+  - uses: actions/attest-build-provenance@v4
+    id: provenance
+    with:
+      subject-path: dist/firmware.bin
+  - run: cp "$BUNDLE" dist/firmware.provenance.sigstore.json
+    env:
+      BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+  - uses: affectra/upload-sbom@v2
+    with:
+      # url, organization, product, variant, version as above
+      sbom: dist/sbom.cdx.json
+      provenance: dist/firmware.provenance.sigstore.json
+```
+
+The bundles go to the same release after the SBOMs. Affectra verifies them like SBOM
+signatures, and refuses provenance whose contents don't match its signing certificate.
+They count against the organization's signature requirement as well. As for SBOM
+attestations, only public repositories work for now. This needs an Affectra version
+with build provenance (ADR 0024). On an older one the step fails after the SBOM upload
+and says so.
+
 ## Inputs
 
 | Input | Required | |
@@ -158,6 +189,7 @@ signed by a trusted repository**). Unsigned uploads then fail with 403.
 | `variant` | no | Variant of that product (hardware revision, platform, edition, SKU). Created if missing. Empty: the product's `default` variant. |
 | `version` | yes | Release version. Created if missing. |
 | `sbom` | yes | Files to upload, one path or glob per line. `**` matches any depth. A line that matches nothing fails the step. |
+| `provenance` | no | Build provenance bundles (`actions/attest-build-provenance`'s `bundle-path`), one path or glob per line, uploaded to the same release after the SBOMs. A line that matches nothing fails the step. |
 | `released-at` | no | Release date in RFC 3339 (`2026-11-05T12:00:00Z`), used only when the release is created. |
 | `sign` | no | `true` signs each SBOM with cosign and uploads the signature. Needs cosign 2.4+ and `id-token: write`. Default `false`. |
 
@@ -171,6 +203,7 @@ tag-value), SPDX 3.0 (JSON-LD), up to 64 MiB per file.
 | `release-id` | ID of the release |
 | `release-url` | Link to the release in the Affectra web app |
 | `sbom-ids` | IDs of the uploaded SBOMs, one per line, in file order |
+| `attestation-ids` | IDs of the uploaded build provenance, one per line, in file order |
 
 The step also writes a job summary with each file's result and a link to the
 release.
@@ -233,6 +266,14 @@ curl --fail-with-body -H "Authorization: Bearer $AFFECTRA_API_KEY" \
 
 Affectra accepts signatures from GitHub Actions runs (the certificate must name the
 repository by its numeric IDs).
+
+Build provenance goes to the same release names, as the bundle itself:
+
+```sh
+curl --fail-with-body -H "Authorization: Bearer $AFFECTRA_API_KEY" \
+  -H "Content-Type: application/json" --data-binary @firmware.provenance.sigstore.json \
+  "https://affectra.example.com/v1/orgs/acme/attestation-uploads?product=Gateway&variant=rev-b&version=1.4.0"
+```
 
 ## From v1
 
