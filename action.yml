@@ -38,6 +38,13 @@ inputs:
   sbom:
     description: SBOM files to upload, one path or glob per line (** works). All go to the same release.
     required: true
+  provenance:
+    description: >-
+      Build provenance bundles to upload to the same release after the SBOMs, one path or glob
+      per line: the bundle-path output of actions/attest-build-provenance. Needs Affectra
+      with build provenance (ADR 0024). Leave it out to upload SBOMs only.
+    required: false
+    default: ""
   released-at:
     description: Release date (RFC 3339, e.g. 2026-11-05T12:00:00Z). Used only when the release is created.
     required: false
@@ -60,6 +67,9 @@ outputs:
   sbom-ids:
     description: IDs of the uploaded SBOMs, one per line, in file order
     value: ${{ steps.upload.outputs.sbom-ids }}
+  attestation-ids:
+    description: IDs of the uploaded build provenance attestations, one per line, in file order
+    value: ${{ steps.upload.outputs.attestation-ids }}
 
 runs:
   using: composite
@@ -77,6 +87,7 @@ runs:
         AFFECTRA_VARIANT: ${{ inputs.variant }}
         AFFECTRA_VERSION: ${{ inputs.version }}
         AFFECTRA_SBOM: ${{ inputs.sbom }}
+        AFFECTRA_PROVENANCE: ${{ inputs.provenance }}
         AFFECTRA_RELEASED_AT: ${{ inputs.released-at }}
         AFFECTRA_SIGN: ${{ inputs.sign }}
       run: bash "$GITHUB_ACTION_PATH/upload.sh"

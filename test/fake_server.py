@@ -1,5 +1,6 @@
 """Fake Affectra for test/run.sh: answers each POST with the next scripted
-response and records the request count. Usage:
+response and records the request count, and each request's path and
+Content-Type in COUNTFILE.paths. Usage:
 fake_server.py PORTFILE COUNTFILE SCRIPT...
 Each SCRIPT item is STATUS or STATUS:RETRY_AFTER; the last one repeats."""
 import json
@@ -17,6 +18,20 @@ OK = {
     "created": True,
 }
 
+# What attestation-uploads answers: one image, built by a trusted publisher.
+PROVENANCE = {
+    "release": {"id": "r1"},
+    "variant": {"name": "default"},
+    "attestation": {
+        "id": "a1",
+        "status": "verified",
+        "subjects": [{"name": "fw.bin", "digest": {"sha256": "ab", "sha512": "cd"}}],
+    },
+    "new": {},
+    "created": True,
+    "warnings": [],
+}
+
 
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -26,10 +41,13 @@ class H(BaseHTTPRequestHandler):
         count += 1
         with open(countfile, "w") as f:
             f.write(str(count))
+        with open(countfile + ".paths", "a") as f:
+            f.write(f"{self.path.split('?')[0]} {self.headers.get('Content-Type', '').split(';')[0]}\n")
         status, _, retry = item.partition(":")
         self.send_response(int(status))
         if int(status) < 300:
-            body, ctype = OK, "application/json"
+            body = PROVENANCE if self.path.split("?")[0].endswith("/attestation-uploads") else OK
+            ctype = "application/json"
         else:
             body = {"code": "request.rateLimited", "detail": "Too many requests"}
             ctype = "application/problem+json"
