@@ -7,8 +7,17 @@ branding:
 
 inputs:
   url:
-    description: Base URL of your Affectra instance, e.g. https://affectra.example.com
-    required: true
+    description: >-
+      Affectra's API. Leave it out for the hosted service (https://api.affectra.eu); set it
+      for another instance, e.g. https://affectra.example.com.
+    required: false
+    default: https://api.affectra.eu
+  app-url:
+    description: >-
+      The web app's address, for the link to the release. Leave it out: url with a leading
+      api. replaced by app. (https://app.affectra.eu for the hosted service), else url.
+    required: false
+    default: ""
   organization:
     description: Your Affectra organization (the slug in its URLs). Must be the API key's organization, or trust this repository.
     required: true
@@ -80,6 +89,7 @@ runs:
       # ${{ }} inside the script, so their values cannot inject shell code.
       env:
         AFFECTRA_URL: ${{ inputs.url }}
+        AFFECTRA_APP_URL: ${{ inputs.app-url }}
         AFFECTRA_ORG: ${{ inputs.organization }}
         AFFECTRA_API_KEY: ${{ inputs.api-key }}
         AFFECTRA_AUDIENCE: ${{ inputs.audience }}

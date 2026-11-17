@@ -30,7 +30,6 @@ jobs:
       # ... build, and write your SBOMs (Syft, cdxgen, Yocto, ESP-IDF, ...)
       - uses: affectra/upload-sbom@v2   # pin to a commit SHA in production
         with:
-          url: https://affectra.example.com
           organization: acme
           product: Gateway
           variant: rev-b      # optional
@@ -38,6 +37,9 @@ jobs:
           sbom: |
             build/sbom/*.cdx.json
 ```
+
+This uploads to the hosted service, `https://api.affectra.eu`. For your own Affectra
+instance, add `url:` with its address.
 
 Uploading the same file again changes nothing, so re-running a job is safe.
 
@@ -94,7 +96,6 @@ steps:
   - uses: sigstore/cosign-installer@v3
   - uses: affectra/upload-sbom@v2
     with:
-      url: https://affectra.example.com
       organization: acme
       product: Gateway
       variant: rev-b
@@ -181,7 +182,8 @@ and says so.
 
 | Input | Required | |
 |---|---|---|
-| `url` | yes | Your Affectra instance. Must be `https://` (plain `http://` only for `localhost`). |
+| `url` | no | Affectra's API. Default: `https://api.affectra.eu`, the hosted service. For another instance, its address. Must be `https://` (plain `http://` only for `localhost`). |
+| `app-url` | no | The web app, for the link to the release. Default: `url` with a leading `api.` replaced by `app.` (`https://app.affectra.eu`), else `url`. |
 | `organization` | yes | Your organization's slug, as in its URLs. Must trust this repository, or be the API key's organization. |
 | `api-key` | no | Organization API key, always from a secret. Leave it out to use the job's GitHub OIDC token. |
 | `audience` | no | Audience of the GitHub OIDC token. Defaults to `url`. |
@@ -249,7 +251,7 @@ The action is one HTTP request per file; any CI can do the same:
 ```sh
 curl --fail-with-body -H "Authorization: Bearer $AFFECTRA_API_KEY" \
   -H "Content-Type: application/octet-stream" --data-binary @sbom.cdx.json \
-  "https://affectra.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&variant=rev-b&version=1.4.0"
+  "https://api.affectra.eu/v1/orgs/acme/sbom-uploads?product=Gateway&variant=rev-b&version=1.4.0"
 ```
 
 URL-encode the names; leave out `variant` for the default variant. The response is
@@ -261,7 +263,7 @@ With a signature, send both as `multipart/form-data`:
 cosign sign-blob --yes --new-bundle-format --bundle sbom.sigstore.json sbom.cdx.json
 curl --fail-with-body -H "Authorization: Bearer $AFFECTRA_API_KEY" \
   -F sbom=@sbom.cdx.json -F sigstore_bundle=@sbom.sigstore.json \
-  "https://affectra.example.com/v1/orgs/acme/sbom-uploads?product=Gateway&variant=rev-b&version=1.4.0"
+  "https://api.affectra.eu/v1/orgs/acme/sbom-uploads?product=Gateway&variant=rev-b&version=1.4.0"
 ```
 
 Affectra accepts signatures from GitHub Actions runs (the certificate must name the
@@ -272,7 +274,7 @@ Build provenance goes to the same release names, as the bundle itself:
 ```sh
 curl --fail-with-body -H "Authorization: Bearer $AFFECTRA_API_KEY" \
   -H "Content-Type: application/json" --data-binary @firmware.provenance.sigstore.json \
-  "https://affectra.example.com/v1/orgs/acme/attestation-uploads?product=Gateway&variant=rev-b&version=1.4.0"
+  "https://api.affectra.eu/v1/orgs/acme/attestation-uploads?product=Gateway&variant=rev-b&version=1.4.0"
 ```
 
 ## From v1

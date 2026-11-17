@@ -23,6 +23,8 @@ echo '{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}' >"$work/sbo
 echo '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}' >"$work/fw.provenance.sigstore.json"
 # provenance is the provenance input of the next checks; empty: SBOMs only.
 provenance=""
+# app_url is the app-url input; empty: derived from url.
+app_url=""
 
 failures=0
 # check NAME EXIT REQUESTS SLEEPS OUTPUT_PATTERN SCRIPT...
@@ -40,7 +42,7 @@ check() {
 		PATH="$work/bin:$PATH" SLEEP_LOG="$work/sleeps" RUNNER_TEMP="$work" \
 			AFFECTRA_URL="http://127.0.0.1:$(cat "$work/port")" AFFECTRA_ORG=acme \
 			AFFECTRA_PRODUCT=p AFFECTRA_VERSION=1 AFFECTRA_SBOM=sbom.json \
-			AFFECTRA_RELEASED_AT="" AFFECTRA_API_KEY=testkey AFFECTRA_PROVENANCE="$provenance" \
+			AFFECTRA_RELEASED_AT="" AFFECTRA_API_KEY=testkey AFFECTRA_PROVENANCE="$provenance" AFFECTRA_APP_URL="$app_url" \
 			GITHUB_OUTPUT="$work/ghout" \
 			bash "$root/upload.sh"
 	) >"$work/out" 2>&1 || exit_code=$?
@@ -97,5 +99,33 @@ check "provenance 404 after the SBOM: an older Affectra" 1 2 "" "does not accept
 provenance="missing/*.json"
 check "provenance glob with no match fails before uploading" 1 0 "" "no file matches: missing/*.json" 201
 provenance=""
+
+# The release link: url itself when it isn't an api. host, else app-url.
+release_link() { sed -n '/^release-url<</{n;p;}' "$work/ghout"; }
+check "release link: url when not an api. host" 0 1 "" "uploaded" 201
+case $(release_link) in
+http://127.0.0.1:*/#/release/r1) echo "ok   release link from url" ;;
+*) echo "FAIL release link from url: $(release_link)"; failures=$((failures + 1)) ;;
+esac
+app_url="https://app.example.com/"
+check "release link: app-url wins" 0 1 "" "uploaded" 201
+if [ "$(release_link)" = "https://app.example.com/#/release/r1" ]; then
+	echo "ok   release link from app-url"
+else
+	echo "FAIL release link from app-url: $(release_link)"; failures=$((failures + 1))
+fi
+app_url="ftp://app.example.com"
+check "app-url must be https" 1 0 "" "app-url must start with https://" 201
+app_url=""
+
+# No url: the hosted service, and its web app for the link. Checked without a
+# request: an unusable SBOM path stops the run after the settings.
+out=$(cd "$work" && env -u AFFECTRA_URL AFFECTRA_ORG=acme AFFECTRA_PRODUCT=p AFFECTRA_VERSION=1 \
+	AFFECTRA_SBOM=missing.json AFFECTRA_API_KEY=testkey AFFECTRA_DEBUG_SETTINGS=1 bash "$root/upload.sh" 2>&1 || true)
+if grep -qF "api https://api.affectra.eu, app https://app.affectra.eu" <<<"$out"; then
+	echo "ok   default url: the hosted service, link to app.affectra.eu"
+else
+	echo "FAIL default url:"; printf '     %s\n' "$out"; failures=$((failures + 1))
+fi
 
 [ "$failures" = 0 ] || exit 1
