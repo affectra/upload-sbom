@@ -5,7 +5,9 @@
 # (POST /v1/orgs/{org}/attestation-uploads, ADR 0024).
 #
 # Settings come from the environment (action.yml sets them):
-#   AFFECTRA_URL, AFFECTRA_ORG, AFFECTRA_PRODUCT, AFFECTRA_VARIANT (optional:
+#   AFFECTRA_URL (optional: default https://api.affectra.eu, the hosted service),
+#   AFFECTRA_APP_URL (optional: the web app for the release link; default
+#   AFFECTRA_URL with api. replaced by app.), AFFECTRA_ORG, AFFECTRA_PRODUCT, AFFECTRA_VARIANT (optional:
 #   empty means the product's default variant), AFFECTRA_VERSION, AFFECTRA_SBOM (one path or glob per line),
 #   AFFECTRA_PROVENANCE (optional; SLSA build provenance bundles, one path or
 #   glob per line), AFFECTRA_RELEASED_AT (optional), AFFECTRA_SIGN (true: sign
@@ -59,7 +61,7 @@ summary() { [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n' "$1" >>"$GITHUB_S
 command -v curl >/dev/null || fail "curl is not installed on this runner"
 command -v jq >/dev/null || fail "jq is not installed on this runner"
 
-for v in AFFECTRA_URL AFFECTRA_ORG AFFECTRA_PRODUCT AFFECTRA_VERSION AFFECTRA_SBOM; do
+for v in AFFECTRA_ORG AFFECTRA_PRODUCT AFFECTRA_VERSION AFFECTRA_SBOM; do
 	[ -n "$(printf '%s' "${!v:-}" | tr -d '[:space:]')" ] || fail "input ${v#AFFECTRA_} is empty"
 done
 
@@ -75,12 +77,32 @@ if [ "$sign" = 1 ]; then
 		fail "sign: true needs the job's OIDC token: add \"permissions: id-token: write\" to the job"
 fi
 
-base=${AFFECTRA_URL%/}
+# The hosted service's API (ADR 0020) when no url is given.
+url=$(printf '%s' "${AFFECTRA_URL:-}" | tr -d '[:space:]')
+base=${url:-https://api.affectra.eu}
+base=${base%/}
 case $base in
 https://*) ;;
 http://localhost | http://localhost:* | http://127.0.0.1 | http://127.0.0.1:* | http://\[::1\]*) ;;
 *) fail "url must start with https:// (plain http only for localhost): $base" ;;
 esac
+
+# The release link goes to the web app, which an api. host doesn't serve
+# (ADR 0020): app-url, or url with a leading api. made app., or url itself.
+app=${AFFECTRA_APP_URL:-}
+app=${app%/}
+if [ -z "$app" ]; then
+	case $base in
+	https://api.*) app="https://app.${base#https://api.}" ;;
+	*) app=$base ;;
+	esac
+fi
+case $app in
+https://* | http://localhost | http://localhost:* | http://127.0.0.1 | http://127.0.0.1:* | http://\[::1\]*) ;;
+*) fail "app-url must start with https:// (plain http only for localhost): $app" ;;
+esac
+
+[ -z "${AFFECTRA_DEBUG_SETTINGS:-}" ] || echo "settings: api $base, app $app"
 
 uri() { jq -rn --arg v "$1" '$v | @uri'; }
 
@@ -398,7 +420,7 @@ for f in ${provenance_files[@]+"${provenance_files[@]}"}; do
 done
 
 if [ -n "$release_id" ]; then
-	release_url="$base/#/release/$release_id"
+	release_url="$app/#/release/$release_id"
 	output release-id "$release_id"
 	output release-url "$release_url"
 	output sbom-ids "${sbom_ids%$'\n'}"
