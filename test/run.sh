@@ -21,10 +21,14 @@ SH
 chmod +x "$work/bin/sleep"
 echo '{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}' >"$work/sbom.json"
 echo '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}' >"$work/fw.provenance.sigstore.json"
+printf 'CONFIG_IDF_TARGET="esp32"\nCONFIG_IDF_TARGET_ESP32=y\n# CONFIG_BT_CLASSIC_ENABLED is not set\n' >"$work/sdkconfig"
+cp "$work/sdkconfig" "$work/sdkconfig.old"
 # provenance is the provenance input of the next checks; empty: SBOMs only.
 provenance=""
 # app_url is the app-url input; empty: derived from url.
 app_url=""
+# build_config is the build-config input; empty: none.
+build_config=""
 
 failures=0
 # check NAME EXIT REQUESTS SLEEPS OUTPUT_PATTERN SCRIPT...
@@ -43,6 +47,7 @@ check() {
 			AFFECTRA_URL="http://127.0.0.1:$(cat "$work/port")" AFFECTRA_ORG=acme \
 			AFFECTRA_PRODUCT=p AFFECTRA_VERSION=1 AFFECTRA_SBOM=sbom.json \
 			AFFECTRA_RELEASED_AT="" AFFECTRA_API_KEY=testkey AFFECTRA_PROVENANCE="$provenance" AFFECTRA_APP_URL="$app_url" \
+			AFFECTRA_BUILD_CONFIG="$build_config" \
 			GITHUB_OUTPUT="$work/ghout" \
 			bash "$root/upload.sh"
 	) >"$work/out" 2>&1 || exit_code=$?
@@ -99,6 +104,37 @@ check "provenance 404 after the SBOM: an older Affectra" 1 2 "" "does not accept
 provenance="missing/*.json"
 check "provenance glob with no match fails before uploading" 1 0 "" "no file matches: missing/*.json" 201
 provenance=""
+
+# The build config goes after the SBOM, as text/plain, to build-config-uploads.
+build_config="sdkconfig"
+check "build config after the SBOM" 0 2 "" "sdkconfig: uploaded (build config, esp-idf, xtensa, esp32, 412 symbols)" 201
+want="/v1/orgs/acme/sbom-uploads application/octet-stream
+/v1/orgs/acme/build-config-uploads text/plain"
+if [ "$(cat "$work/count.paths")" = "$want" ] 2>/dev/null; then
+	echo "ok   build config requests: route and Content-Type"
+else
+	echo "FAIL build config requests: got"
+	sed 's/^/     /' "$work/count.paths"
+	failures=$((failures + 1))
+fi
+if [ "$(sed -n '/^build-config-id<</{n;p;}' "$work/ghout")" = b1 ]; then
+	echo "ok   build config: build-config-id output"
+else
+	echo "FAIL build config: build-config-id output missing"
+	failures=$((failures + 1))
+fi
+check "build config refused: fails with the problem message" 1 2 "" "build config upload failed (400): Refused [buildConfig.invalid]" 201 400
+check "build config 404 after the SBOM: an older Affectra" 1 2 "" "does not accept build configs yet" 201 404
+check "build config with an API key under the signature policy: use trusted publishing" 1 2 "" "build configs come only from trusted publisher runs" 201 403
+check "build config too large" 1 2 "" "larger than Affectra's 1 MiB limit" 201 413
+provenance="fw.provenance.sigstore.json"
+check "SBOM, provenance, then build config" 0 3 "" "sdkconfig: uploaded (build config" 201
+provenance=""
+build_config="sdkconfig*"
+check "build config glob matching two files fails before uploading" 1 0 "" "build-config takes one file" 201
+build_config="missing.config"
+check "build config that doesn't exist fails before uploading" 1 0 "" "not a file: missing.config" 201
+build_config=""
 
 # The release link: url itself when it isn't an api. host, else app-url.
 release_link() { sed -n '/^release-url<</{n;p;}' "$work/ghout"; }

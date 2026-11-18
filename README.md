@@ -51,7 +51,7 @@ Required inputs:
 Everything else is in the Affectra documentation:
 
 - [Upload SBOMs from GitHub Actions](https://docs.affectra.eu/guides/upload-github-actions/):
-  trusted publishing, API keys, variants, signing, build provenance, errors.
+  trusted publishing, API keys, variants, signing, build provenance, build configs, errors.
 - [Inputs and outputs](https://docs.affectra.eu/reference/upload-sbom/): every input
   and output of this action.
 

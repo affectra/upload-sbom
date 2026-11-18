@@ -2,7 +2,8 @@
 # Uploads SBOM files to an Affectra release named by product, variant and
 # version (POST /v1/orgs/{org}/sbom-uploads, ADR 0005 and ADR 0011), then
 # build provenance bundles to the same release
-# (POST /v1/orgs/{org}/attestation-uploads, ADR 0024).
+# (POST /v1/orgs/{org}/attestation-uploads, ADR 0024) and a Kconfig build
+# config (POST /v1/orgs/{org}/build-config-uploads, ADR 0034).
 #
 # Settings come from the environment (action.yml sets them):
 #   AFFECTRA_URL (optional: default https://api.affectra.eu, the hosted service),
@@ -10,7 +11,8 @@
 #   AFFECTRA_URL with api. replaced by app.), AFFECTRA_ORG, AFFECTRA_PRODUCT, AFFECTRA_VARIANT (optional:
 #   empty means the product's default variant), AFFECTRA_VERSION, AFFECTRA_SBOM (one path or glob per line),
 #   AFFECTRA_PROVENANCE (optional; SLSA build provenance bundles, one path or
-#   glob per line), AFFECTRA_RELEASED_AT (optional), AFFECTRA_SIGN (true: sign
+#   glob per line), AFFECTRA_BUILD_CONFIG (optional; one Kconfig file:
+#   sdkconfig, Zephyr or Linux .config), AFFECTRA_RELEASED_AT (optional), AFFECTRA_SIGN (true: sign
 #   each file with cosign; otherwise <file>.sigstore.json is sent if it
 #   exists, ADR 0007),
 #   and for authentication either
@@ -167,6 +169,12 @@ if [ -n "$(printf '%s' "${AFFECTRA_PROVENANCE:-}" | tr -d '[:space:]')" ]; then
 	expand "$AFFECTRA_PROVENANCE" 0
 	provenance_files=("${files[@]}")
 fi
+build_config=""
+if [ -n "$(printf '%s' "${AFFECTRA_BUILD_CONFIG:-}" | tr -d '[:space:]')" ]; then
+	expand "$AFFECTRA_BUILD_CONFIG" 0
+	[ ${#files[@]} = 1 ] || fail "build-config takes one file (a release has one build config); it matched ${#files[@]}: ${files[*]}"
+	build_config=${files[0]}
+fi
 
 # --- upload ---
 
@@ -294,11 +302,20 @@ post() {
 		# run: the server predates build provenance.
 		case $url in */attestation-uploads\?*) [ "$announced" = 1 ] &&
 			fail "this Affectra instance does not accept build provenance yet (404); leave out provenance, or ask your Affectra admin to upgrade" ;;
+		*/build-config-uploads\?*) [ "$announced" = 1 ] &&
+			fail "this Affectra instance does not accept build configs yet (404); leave out build-config, or ask your Affectra admin to upgrade" ;;
 		esac
 		[ "$auth" = key ] && fail "organization \"$AFFECTRA_ORG\" not found for this API key (404). The key must belong to that organization."
 		fail "organization \"$AFFECTRA_ORG\" does not trust $repo for this run (404). An admin adds it in Affectra under Trusted publishers; check its workflow, ref and environment restrictions (this run: ${GITHUB_WORKFLOW_REF:-unknown workflow})."
 		;;
-	403) fail "not allowed to upload (403): $msg" ;;
+	403)
+		# Signed uploads required (ADR 0034 §2, the SBOM signature policy):
+		# build configs then come only from trusted publisher runs.
+		if [ "$auth" = key ] && [ "$(jq -r '.code? // empty' <<<"$body" 2>/dev/null)" = buildConfig.signatureRequired ]; then
+			fail "organization \"$AFFECTRA_ORG\" requires signed uploads, so build configs come only from trusted publisher runs (403): leave out api-key, give the job \"permissions: id-token: write\" and trust $repo in Affectra under Trusted publishers"
+		fi
+		fail "not allowed to upload (403): $msg"
+		;;
 	esac
 }
 
@@ -419,12 +436,50 @@ for f in ${provenance_files[@]+"${provenance_files[@]}"}; do
 	provenance_rows+="| \`$f\` | $state | $images | $status |"$'\n'
 done
 
+# The build config goes to the same release (ADR 0034 §2): the Kconfig file
+# as text/plain. Affectra keeps only its y/m/n symbols.
+build_config_id="" build_config_row=""
+if [ -n "$build_config" ]; then
+	f=$build_config
+	if post "$f" "$org_base/build-config-uploads?$query" -H "Content-Type: text/plain" --data-binary "@$f"; then
+		case $code in
+		200 | 201)
+			announce
+			build_config_id=$(jq -r '.build_config.id' <<<"$body")
+			if [ "$(jq -r '.created' <<<"$body")" = true ]; then
+				state="uploaded"
+			else
+				state="already there"
+			fi
+			# What Affectra recognised, e.g. "esp-idf, xtensa, esp32"; empty
+			# parts are left out.
+			facts=$(jq -r '[.build_config | .build_system, .cpu_arch, .target | select(. != "" and . != null)] | join(", ")' <<<"$body")
+			symbols=$(jq -r '.build_config.symbol_count' <<<"$body")
+			echo "$f: $state (build config${facts:+, $facts}, $symbols symbols)"
+			warnings "$f"
+			build_config_row="| \`$f\` | $state | ${facts:-not recognised} | $symbols |"
+			;;
+		413)
+			error "build config refused (413): larger than Affectra's 1 MiB limit" "$f"
+			failed=1
+			;;
+		*)
+			error "build config upload failed ($code): $msg" "$f"
+			failed=1
+			;;
+		esac
+	else
+		failed=1
+	fi
+fi
+
 if [ -n "$release_id" ]; then
 	release_url="$app/#/release/$release_id"
 	output release-id "$release_id"
 	output release-url "$release_url"
 	output sbom-ids "${sbom_ids%$'\n'}"
 	output attestation-ids "${attestation_ids%$'\n'}"
+	output build-config-id "$build_config_id"
 	summary "### Affectra: $label / $AFFECTRA_VERSION"
 	if [ -n "$rows" ]; then
 		summary ""
@@ -437,6 +492,12 @@ if [ -n "$release_id" ]; then
 		summary "| Build provenance | Result | Images | Signature |"
 		summary "| --- | --- | --- | --- |"
 		summary "${provenance_rows%$'\n'}"
+	fi
+	if [ -n "$build_config_row" ]; then
+		summary ""
+		summary "| Build config | Result | Recognised | Symbols |"
+		summary "| --- | --- | --- | --- |"
+		summary "$build_config_row"
 	fi
 	summary ""
 	summary "[Open the release in Affectra]($release_url). Vulnerabilities appear there once matching has run (usually within a minute)."
