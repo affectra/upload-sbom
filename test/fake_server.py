@@ -32,6 +32,25 @@ PROVENANCE = {
     "warnings": [],
 }
 
+# What build-config-uploads answers: an ESP-IDF sdkconfig for an ESP32.
+BUILD_CONFIG = {
+    "release": {"id": "r1"},
+    "variant": {"name": "default"},
+    "build_config": {
+        "id": "b1",
+        "build_system": "esp-idf",
+        "cpu_arch": "xtensa",
+        "target": "esp32",
+        "symbol_count": 412,
+    },
+    "new": {},
+    "created": True,
+}
+
+# The problem code of an error answer: what Affectra sends for that status
+# on these routes.
+CODES = {403: "buildConfig.signatureRequired", 400: "buildConfig.invalid"}
+
 
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -45,9 +64,18 @@ class H(BaseHTTPRequestHandler):
             f.write(f"{self.path.split('?')[0]} {self.headers.get('Content-Type', '').split(';')[0]}\n")
         status, _, retry = item.partition(":")
         self.send_response(int(status))
+        path = self.path.split("?")[0]
         if int(status) < 300:
-            body = PROVENANCE if self.path.split("?")[0].endswith("/attestation-uploads") else OK
+            if path.endswith("/attestation-uploads"):
+                body = PROVENANCE
+            elif path.endswith("/build-config-uploads"):
+                body = BUILD_CONFIG
+            else:
+                body = OK
             ctype = "application/json"
+        elif int(status) in CODES and path.endswith("/build-config-uploads"):
+            body = {"code": CODES[int(status)], "detail": "Refused"}
+            ctype = "application/problem+json"
         else:
             body = {"code": "request.rateLimited", "detail": "Too many requests"}
             ctype = "application/problem+json"

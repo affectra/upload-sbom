@@ -54,6 +54,14 @@ inputs:
       with build provenance (ADR 0024). Leave it out to upload SBOMs only.
     required: false
     default: ""
+  build-config:
+    description: >-
+      The firmware's Kconfig file, uploaded to the same release after the SBOMs: ESP-IDF's
+      sdkconfig, Zephyr's build/zephyr/.config or a Linux .config. Affectra keeps only the
+      y/m/n symbols and uses them to tell which findings don't apply to this build. One path
+      or glob that matches one file. Needs Affectra with build configs (ADR 0034).
+    required: false
+    default: ""
   released-at:
     description: Release date (RFC 3339, e.g. 2026-11-05T12:00:00Z). Used only when the release is created.
     required: false
@@ -79,6 +87,9 @@ outputs:
   attestation-ids:
     description: IDs of the uploaded build provenance attestations, one per line, in file order
     value: ${{ steps.upload.outputs.attestation-ids }}
+  build-config-id:
+    description: ID of the uploaded build config, if build-config was given
+    value: ${{ steps.upload.outputs.build-config-id }}
 
 runs:
   using: composite
@@ -98,6 +109,7 @@ runs:
         AFFECTRA_VERSION: ${{ inputs.version }}
         AFFECTRA_SBOM: ${{ inputs.sbom }}
         AFFECTRA_PROVENANCE: ${{ inputs.provenance }}
+        AFFECTRA_BUILD_CONFIG: ${{ inputs.build-config }}
         AFFECTRA_RELEASED_AT: ${{ inputs.released-at }}
         AFFECTRA_SIGN: ${{ inputs.sign }}
       run: bash "$GITHUB_ACTION_PATH/upload.sh"
