@@ -475,8 +475,11 @@ fi
 
 if [ -n "$release_id" ]; then
 	release_url="$app/#/release/$release_id"
+	# No base: the web app compares with the release's previous one (RFC 0048).
+	compare_url="$app/#/compare/$release_id"
 	output release-id "$release_id"
 	output release-url "$release_url"
+	output compare-url "$compare_url"
 	output sbom-ids "${sbom_ids%$'\n'}"
 	output attestation-ids "${attestation_ids%$'\n'}"
 	output build-config-id "$build_config_id"
@@ -501,5 +504,6 @@ if [ -n "$release_id" ]; then
 	fi
 	summary ""
 	summary "[Open the release in Affectra]($release_url). Vulnerabilities appear there once matching has run (usually within a minute)."
+	summary "[Compare it with the previous release]($compare_url)."
 fi
 exit "$failed"

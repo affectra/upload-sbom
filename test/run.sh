@@ -36,7 +36,7 @@ failures=0
 check() {
 	local name=$1 want_exit=$2 want_reqs=$3 want_sleeps=$4 pattern=$5
 	shift 5
-	rm -f "$work/port" "$work/count" "$work/count.paths" "$work/sleeps" "$work/out" "$work/ghout"
+	rm -f "$work/port" "$work/count" "$work/count.paths" "$work/sleeps" "$work/out" "$work/ghout" "$work/summary"
 	python3 "$root/test/fake_server.py" "$work/port" "$work/count" "$@" &
 	srv_pid=$!
 	while [ ! -s "$work/port" ]; do command sleep 0.05; done
@@ -48,7 +48,7 @@ check() {
 			AFFECTRA_PRODUCT=p AFFECTRA_VERSION=1 AFFECTRA_SBOM=sbom.json \
 			AFFECTRA_RELEASED_AT="" AFFECTRA_API_KEY=testkey AFFECTRA_PROVENANCE="$provenance" AFFECTRA_APP_URL="$app_url" \
 			AFFECTRA_BUILD_CONFIG="$build_config" \
-			GITHUB_OUTPUT="$work/ghout" \
+			GITHUB_OUTPUT="$work/ghout" GITHUB_STEP_SUMMARY="$work/summary" \
 			bash "$root/upload.sh"
 	) >"$work/out" 2>&1 || exit_code=$?
 	kill "$srv_pid" 2>/dev/null || true
@@ -149,6 +149,17 @@ if [ "$(release_link)" = "https://app.example.com/#/release/r1" ]; then
 	echo "ok   release link from app-url"
 else
 	echo "FAIL release link from app-url: $(release_link)"; failures=$((failures + 1))
+fi
+compare_link() { sed -n '/^compare-url<</{n;p;}' "$work/ghout"; }
+if [ "$(compare_link)" = "https://app.example.com/#/compare/r1" ]; then
+	echo "ok   compare link from app-url"
+else
+	echo "FAIL compare link from app-url: $(compare_link)"; failures=$((failures + 1))
+fi
+if grep -qF '(https://app.example.com/#/compare/r1)' "$work/summary"; then
+	echo "ok   compare link in the job summary"
+else
+	echo "FAIL compare link in the job summary"; failures=$((failures + 1))
 fi
 app_url="ftp://app.example.com"
 check "app-url must be https" 1 0 "" "app-url must start with https://" 201
