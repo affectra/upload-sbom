@@ -46,6 +46,26 @@ Required inputs:
 | `version` | Release version. Created if missing |
 | `sbom` | Files to upload, one path or glob per line |
 
+### A firmware SBOM and an AI BOM
+
+A release that ships a machine learning model can have the model's AI BOM (CycloneDX
+ML-BOM, or SPDX 3 with the AI and Dataset profiles) next to the firmware SBOM. Both are
+SBOMs to this action: list them in `sbom`, one per line, and they go to the same release.
+
+```yaml
+      - uses: affectra/upload-sbom@07cf6e5ce7a6d2dec0b49e6f527df5882f137111 # v2.2.0
+        with:
+          organization: acme
+          product: Door camera
+          version: ${{ github.ref_name }}
+          sbom: |
+            build/sbom/firmware.cdx.json
+            build/sbom/person-detect.aibom.cdx.json
+```
+
+Affectra shows the model card, the datasets and the models it was derived from on the
+release's **AI models** tab.
+
 ## Documentation
 
 Everything else is in the Affectra documentation:
@@ -54,6 +74,8 @@ Everything else is in the Affectra documentation:
   trusted publishing, API keys, variants, signing, build provenance, build configs, errors.
 - [Inputs and outputs](https://docs.affectra.eu/reference/upload-sbom/): every input
   and output of this action.
+- [AI models and datasets](https://docs.affectra.eu/guides/ai-models/): AI BOMs, and
+  finding the releases that ship a model or were trained on a dataset.
 
 ## Development
 
