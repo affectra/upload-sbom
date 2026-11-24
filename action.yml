@@ -81,6 +81,11 @@ outputs:
   release-url:
     description: Link to the release in the Affectra web app
     value: ${{ steps.upload.outputs.release-url }}
+  compare-url:
+    description: >-
+      Link to the comparison of the release with its previous release in the Affectra web app:
+      what changed in components and findings. Affectra picks the previous release.
+    value: ${{ steps.upload.outputs.compare-url }}
   sbom-ids:
     description: IDs of the uploaded SBOMs, one per line, in file order
     value: ${{ steps.upload.outputs.sbom-ids }}
