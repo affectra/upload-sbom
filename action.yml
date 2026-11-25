@@ -54,6 +54,14 @@ inputs:
       with build provenance (ADR 0024). Leave it out to upload SBOMs only.
     required: false
     default: ""
+  model-signature:
+    description: >-
+      OpenSSF model signatures to upload to the same release after the build provenance, one
+      path or glob per line: the signature model_signing sign writes (model.sig). Affectra
+      takes whole files hashed with SHA-256, up to 1024 files and 1 MiB per signature. Needs
+      Affectra with model signatures (ADR 0048).
+    required: false
+    default: ""
   build-config:
     description: >-
       The firmware's Kconfig file, uploaded to the same release after the SBOMs: ESP-IDF's
@@ -92,6 +100,9 @@ outputs:
   attestation-ids:
     description: IDs of the uploaded build provenance attestations, one per line, in file order
     value: ${{ steps.upload.outputs.attestation-ids }}
+  model-signature-ids:
+    description: IDs of the uploaded model signatures, one per line, in file order
+    value: ${{ steps.upload.outputs.model-signature-ids }}
   build-config-id:
     description: ID of the uploaded build config, if build-config was given
     value: ${{ steps.upload.outputs.build-config-id }}
@@ -114,6 +125,7 @@ runs:
         AFFECTRA_VERSION: ${{ inputs.version }}
         AFFECTRA_SBOM: ${{ inputs.sbom }}
         AFFECTRA_PROVENANCE: ${{ inputs.provenance }}
+        AFFECTRA_MODEL_SIGNATURE: ${{ inputs.model-signature }}
         AFFECTRA_BUILD_CONFIG: ${{ inputs.build-config }}
         AFFECTRA_RELEASED_AT: ${{ inputs.released-at }}
         AFFECTRA_SIGN: ${{ inputs.sign }}

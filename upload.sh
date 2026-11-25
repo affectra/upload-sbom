@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Uploads SBOM files to an Affectra release named by product, variant and
 # version (POST /v1/orgs/{org}/sbom-uploads, ADR 0005 and ADR 0011), then
-# build provenance bundles to the same release
-# (POST /v1/orgs/{org}/attestation-uploads, ADR 0024) and a Kconfig build
+# build provenance bundles and model signatures to the same release
+# (POST /v1/orgs/{org}/attestation-uploads, ADR 0024 and ADR 0048) and a Kconfig build
 # config (POST /v1/orgs/{org}/build-config-uploads, ADR 0034).
 #
 # Settings come from the environment (action.yml sets them):
@@ -11,7 +11,8 @@
 #   AFFECTRA_URL with api. replaced by app.), AFFECTRA_ORG, AFFECTRA_PRODUCT, AFFECTRA_VARIANT (optional:
 #   empty means the product's default variant), AFFECTRA_VERSION, AFFECTRA_SBOM (one path or glob per line),
 #   AFFECTRA_PROVENANCE (optional; SLSA build provenance bundles, one path or
-#   glob per line), AFFECTRA_BUILD_CONFIG (optional; one Kconfig file:
+#   glob per line), AFFECTRA_MODEL_SIGNATURE (optional; OpenSSF model
+#   signatures, one path or glob per line), AFFECTRA_BUILD_CONFIG (optional; one Kconfig file:
 #   sdkconfig, Zephyr or Linux .config), AFFECTRA_RELEASED_AT (optional), AFFECTRA_SIGN (true: sign
 #   each file with cosign; otherwise <file>.sigstore.json is sent if it
 #   exists, ADR 0007),
@@ -169,6 +170,11 @@ if [ -n "$(printf '%s' "${AFFECTRA_PROVENANCE:-}" | tr -d '[:space:]')" ]; then
 	expand "$AFFECTRA_PROVENANCE" 0
 	provenance_files=("${files[@]}")
 fi
+model_signature_files=()
+if [ -n "$(printf '%s' "${AFFECTRA_MODEL_SIGNATURE:-}" | tr -d '[:space:]')" ]; then
+	expand "$AFFECTRA_MODEL_SIGNATURE" 0
+	model_signature_files=("${files[@]}")
+fi
 build_config=""
 if [ -n "$(printf '%s' "${AFFECTRA_BUILD_CONFIG:-}" | tr -d '[:space:]')" ]; then
 	expand "$AFFECTRA_BUILD_CONFIG" 0
@@ -301,7 +307,7 @@ post() {
 		# The SBOMs went to this organization, so it exists and trusts this
 		# run: the server predates build provenance.
 		case $url in */attestation-uploads\?*) [ "$announced" = 1 ] &&
-			fail "this Affectra instance does not accept build provenance yet (404); leave out provenance, or ask your Affectra admin to upgrade" ;;
+			fail "this Affectra instance does not accept $upload_kind yet (404); leave out ${upload_input}, or ask your Affectra admin to upgrade" ;;
 		*/build-config-uploads\?*) [ "$announced" = 1 ] &&
 			fail "this Affectra instance does not accept build configs yet (404); leave out build-config, or ask your Affectra admin to upgrade" ;;
 		esac
@@ -401,6 +407,7 @@ done
 # file is a Sigstore bundle as actions/attest-build-provenance writes it
 # (its bundle-path output), sent as it is.
 attestation_ids="" provenance_rows=""
+upload_kind="build provenance" upload_input=provenance
 # ${a[@]+...}: bash 3 treats an empty array as unbound under set -u.
 for f in ${provenance_files[@]+"${provenance_files[@]}"}; do
 	post "$f" "$org_base/attestation-uploads?$query" -H "Content-Type: application/json" --data-binary "@$f" || {
@@ -434,6 +441,58 @@ for f in ${provenance_files[@]+"${provenance_files[@]}"}; do
 	echo "$f: $state (build provenance, $images images, $status)"
 	warnings "$f"
 	provenance_rows+="| \`$f\` | $state | $images | $status |"$'\n'
+done
+
+# Model signatures go to the same release, after the build provenance
+# (ADR 0048 §2): each file is the Sigstore bundle model_signing sign writes,
+# sent as it is to the same route as provenance.
+model_signature_ids="" model_signature_rows=""
+upload_kind="model signatures" upload_input=model-signature
+for f in ${model_signature_files[@]+"${model_signature_files[@]}"}; do
+	post "$f" "$org_base/attestation-uploads?$query" -H "Content-Type: application/json" --data-binary "@$f" || {
+		failed=1
+		continue
+	}
+	case $code in
+	200 | 201) ;;
+	413)
+		error "model signature refused (413): larger than Affectra's 1 MiB limit" "$f"
+		failed=1
+		continue
+		;;
+	503)
+		error "Affectra could not check the model signature right now (503): $msg" "$f"
+		failed=1
+		continue
+		;;
+	*)
+		# An Affectra without model signatures reads one as build provenance
+		# with the wrong predicate type.
+		error "model signature upload failed ($code): $msg" "$f"
+		failed=1
+		continue
+		;;
+	esac
+	if [ "$(jq -r '.attestation.kind // empty' <<<"$body")" != model_signature ]; then
+		error "Affectra stored $f as $(jq -r '.attestation.kind // "build provenance"' <<<"$body"), not as a model signature; is it the file model_signing sign wrote?" "$f"
+		failed=1
+		continue
+	fi
+
+	announce
+	model_signature_ids+="$(jq -r '.attestation.id' <<<"$body")"$'\n'
+	if [ "$(jq -r '.created' <<<"$body")" = true ]; then
+		state="uploaded"
+	else
+		state="already there"
+	fi
+	# verified: signed by a repository the organization trusts.
+	status=$(jq -r '.attestation.status' <<<"$body")
+	model=$(jq -r '.attestation.model_name // ""' <<<"$body")
+	model_files=$(jq -r '.attestation.subjects // [] | length' <<<"$body")
+	echo "$f: $state (model signature, $model, $model_files files, $status)"
+	warnings "$f"
+	model_signature_rows+="| \`$f\` | $state | \`$model\` | $model_files | $status |"$'\n'
 done
 
 # The build config goes to the same release (ADR 0034 §2): the Kconfig file
@@ -482,6 +541,7 @@ if [ -n "$release_id" ]; then
 	output compare-url "$compare_url"
 	output sbom-ids "${sbom_ids%$'\n'}"
 	output attestation-ids "${attestation_ids%$'\n'}"
+	output model-signature-ids "${model_signature_ids%$'\n'}"
 	output build-config-id "$build_config_id"
 	summary "### Affectra: $label / $AFFECTRA_VERSION"
 	if [ -n "$rows" ]; then
@@ -495,6 +555,12 @@ if [ -n "$release_id" ]; then
 		summary "| Build provenance | Result | Images | Signature |"
 		summary "| --- | --- | --- | --- |"
 		summary "${provenance_rows%$'\n'}"
+	fi
+	if [ -n "$model_signature_rows" ]; then
+		summary ""
+		summary "| Model signature | Result | Model | Files | Signature |"
+		summary "| --- | --- | --- | --- | --- |"
+		summary "${model_signature_rows%$'\n'}"
 	fi
 	if [ -n "$build_config_row" ]; then
 		summary ""
