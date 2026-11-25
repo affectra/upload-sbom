@@ -21,6 +21,7 @@ SH
 chmod +x "$work/bin/sleep"
 echo '{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}' >"$work/sbom.json"
 echo '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}' >"$work/fw.provenance.sigstore.json"
+echo '{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json","note":"model_signing"}' >"$work/model.sig"
 printf 'CONFIG_IDF_TARGET="esp32"\nCONFIG_IDF_TARGET_ESP32=y\n# CONFIG_BT_CLASSIC_ENABLED is not set\n' >"$work/sdkconfig"
 cp "$work/sdkconfig" "$work/sdkconfig.old"
 # provenance is the provenance input of the next checks; empty: SBOMs only.
@@ -29,6 +30,8 @@ provenance=""
 app_url=""
 # build_config is the build-config input; empty: none.
 build_config=""
+# model_signature is the model-signature input; empty: none.
+model_signature=""
 
 failures=0
 # check NAME EXIT REQUESTS SLEEPS OUTPUT_PATTERN SCRIPT...
@@ -47,7 +50,7 @@ check() {
 			AFFECTRA_URL="http://127.0.0.1:$(cat "$work/port")" AFFECTRA_ORG=acme \
 			AFFECTRA_PRODUCT=p AFFECTRA_VERSION=1 AFFECTRA_SBOM=sbom.json \
 			AFFECTRA_RELEASED_AT="" AFFECTRA_API_KEY=testkey AFFECTRA_PROVENANCE="$provenance" AFFECTRA_APP_URL="$app_url" \
-			AFFECTRA_BUILD_CONFIG="$build_config" \
+			AFFECTRA_BUILD_CONFIG="$build_config" AFFECTRA_MODEL_SIGNATURE="$model_signature" \
 			GITHUB_OUTPUT="$work/ghout" GITHUB_STEP_SUMMARY="$work/summary" \
 			bash "$root/upload.sh"
 	) >"$work/out" 2>&1 || exit_code=$?
@@ -104,6 +107,53 @@ check "provenance 404 after the SBOM: an older Affectra" 1 2 "" "does not accept
 provenance="missing/*.json"
 check "provenance glob with no match fails before uploading" 1 0 "" "no file matches: missing/*.json" 201
 provenance=""
+
+# Model signatures go after the SBOM and the provenance, as raw JSON, to
+# attestation-uploads.
+model_signature="model.sig"
+check "model signature after the SBOM" 0 2 "" "model.sig: uploaded (model signature, person-detect, 2 files, verified)" 201
+want="/v1/orgs/acme/sbom-uploads application/octet-stream
+/v1/orgs/acme/attestation-uploads application/json"
+if [ "$(cat "$work/count.paths")" = "$want" ] 2>/dev/null; then
+	echo "ok   model signature requests: route and Content-Type"
+else
+	echo "FAIL model signature requests: got"
+	sed 's/^/     /' "$work/count.paths"
+	failures=$((failures + 1))
+fi
+if [ "$(sed -n '/^model-signature-ids<</{n;p;}' "$work/ghout")" = m1 ]; then
+	echo "ok   model signature: model-signature-ids output"
+else
+	echo "FAIL model signature: model-signature-ids output missing"
+	failures=$((failures + 1))
+fi
+# shellcheck disable=SC2016 # literal backticks: Markdown code in the summary
+if grep -qF '| `model.sig` | uploaded | `person-detect` | 2 | verified |' "$work/summary"; then
+	echo "ok   model signature in the job summary"
+else
+	echo "FAIL model signature in the job summary"; failures=$((failures + 1))
+fi
+provenance="fw.provenance.sigstore.json"
+check "SBOM, provenance, then model signature" 0 3 "" "model.sig: uploaded (model signature" 201
+want="/v1/orgs/acme/sbom-uploads application/octet-stream
+/v1/orgs/acme/attestation-uploads application/json
+/v1/orgs/acme/attestation-uploads application/json"
+if [ "$(cat "$work/count.paths")" = "$want" ] 2>/dev/null; then
+	echo "ok   provenance before the model signature"
+else
+	echo "FAIL provenance before the model signature: got"
+	sed 's/^/     /' "$work/count.paths"
+	failures=$((failures + 1))
+fi
+provenance=""
+check "model signature refused: fails with the problem message" 1 2 "" "model signature upload failed (400)" 201 400
+check "model signature too large" 1 2 "" "larger than Affectra's 1 MiB limit" 201 413
+check "model signature 404 after the SBOM: an older Affectra" 1 2 "" "does not accept model signatures yet" 201 404
+model_signature="fw.provenance.sigstore.json"
+check "a provenance bundle as model-signature is refused" 1 2 "" "not as a model signature" 201
+model_signature="missing/*.sig"
+check "model signature glob with no match fails before uploading" 1 0 "" "no file matches: missing/*.sig" 201
+model_signature=""
 
 # The build config goes after the SBOM, as text/plain, to build-config-uploads.
 build_config="sdkconfig"

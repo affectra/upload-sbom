@@ -66,12 +66,44 @@ SBOMs to this action: list them in `sbom`, one per line, and they go to the same
 Affectra shows the model card, the datasets and the models it was derived from on the
 release's **AI models** tab.
 
+### A signed model
+
+To show that the shipped model is the one you trained, sign the trained model's files
+with OpenSSF model signing (`model_signing`, 1.0 or later) in the workflow, keyless with
+the job's OIDC token, and pass the signature as `model-signature`. It goes to the same
+release after the SBOMs and the build provenance. Affectra takes whole files hashed with
+SHA-256 (the default), up to 1024 files and 1 MiB per signature.
+
+```yaml
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # ... train or download the model into build/model ...
+      - run: |
+          pip install model-signing==1.1.1
+          model_signing sign sigstore --use_ambient_credentials --signature build/model.sig build/model
+      - uses: affectra/upload-sbom@v2
+        with:
+          organization: acme
+          product: Door camera
+          version: ${{ github.ref_name }}
+          sbom: |
+            build/sbom/firmware.cdx.json
+            build/sbom/person-detect.aibom.cdx.json
+          model-signature: build/model.sig
+```
+
+Affectra lists the signed files on the release's **Artifacts** tab, "Model files, signed by"
+this workflow, and links them to the model in the AI BOM by digest.
+
 ## Documentation
 
 Everything else is in the Affectra documentation:
 
 - [Upload SBOMs from GitHub Actions](https://docs.affectra.eu/guides/upload-github-actions/):
-  trusted publishing, API keys, variants, signing, build provenance, build configs, errors.
+  trusted publishing, API keys, variants, signing, build provenance, model signatures, build
+  configs, errors.
 - [Inputs and outputs](https://docs.affectra.eu/reference/upload-sbom/): every input
   and output of this action.
 - [AI models and datasets](https://docs.affectra.eu/guides/ai-models/): AI BOMs, and

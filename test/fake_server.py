@@ -32,6 +32,26 @@ PROVENANCE = {
     "warnings": [],
 }
 
+# What attestation-uploads answers for a model signature (a body naming
+# model_signing): two files of one model, signed by a trusted publisher.
+MODEL_SIGNATURE = {
+    "release": {"id": "r1"},
+    "variant": {"name": "default"},
+    "attestation": {
+        "id": "m1",
+        "kind": "model_signature",
+        "model_name": "person-detect",
+        "status": "verified",
+        "subjects": [
+            {"name": "model.tflite", "digest": {"sha256": "ab"}},
+            {"name": "config.json", "digest": {"sha256": "cd"}},
+        ],
+    },
+    "new": {},
+    "created": True,
+    "warnings": [],
+}
+
 # What build-config-uploads answers: an ESP-IDF sdkconfig for an ESP32.
 BUILD_CONFIG = {
     "release": {"id": "r1"},
@@ -55,7 +75,7 @@ CODES = {403: "buildConfig.signatureRequired", 400: "buildConfig.invalid"}
 class H(BaseHTTPRequestHandler):
     def do_POST(self):
         global count
-        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        request = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         item = script[min(count, len(script) - 1)]
         count += 1
         with open(countfile, "w") as f:
@@ -67,7 +87,7 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if int(status) < 300:
             if path.endswith("/attestation-uploads"):
-                body = PROVENANCE
+                body = MODEL_SIGNATURE if b"model_signing" in request else PROVENANCE
             elif path.endswith("/build-config-uploads"):
                 body = BUILD_CONFIG
             else:
